@@ -1,6 +1,10 @@
 # Local toolchains (Connect IQ SDK, Gradle) and the CIQ signing key live here
 /tools/
 
+# Garmin's proprietary SDK Manager — not redistributable, download from
+# https://developer.garmin.com/connect-iq/sdk/
+/connectiq-sdk-manager-windows/
+
 # Connect IQ build output
 edge-app/bin/
 
