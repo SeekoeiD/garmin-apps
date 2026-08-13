@@ -3,7 +3,7 @@
 
     <iq:application
         id="36e2af37-6039-4d5e-995f-8ebf715014f2"
-        type="watch-app"
+        type="widget"
         name="@Strings.AppName"
         entry="MusicControlApp"
         launcherIcon="@Drawables.LauncherIcon"
