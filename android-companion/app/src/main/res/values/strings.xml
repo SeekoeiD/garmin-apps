@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Edge Music Control</string>
+
+    <string name="heading">Edge Music Control</string>
+    <string name="subheading">Music remote for a Garmin Edge 830 over Connect IQ.</string>
+
+    <string name="step_notification_access">1. Notification access</string>
+    <string name="step_battery">2. Battery optimisation</string>
+    <string name="step_service">3. Remote service</string>
+
+    <string name="grant">Grant</string>
+    <string name="exempt">Exempt</string>
+    <string name="start_service">Start service</string>
+    <string name="stop_service">Stop service</string>
+    <string name="refresh">Refresh</string>
+
+    <string name="granted">Granted</string>
+    <string name="not_granted">Not granted</string>
+    <string name="exempted">Exempted</string>
+    <string name="not_exempted">Not exempted</string>
+    <string name="running">Running</string>
+    <string name="stopped">Stopped</string>
+
+    <string name="notification_channel_name">Edge remote</string>
+    <string name="notification_title">Edge music remote active</string>
+</resources>

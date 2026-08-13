@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
+
+    <iq:application
+        id="36e2af37-6039-4d5e-995f-8ebf715014f2"
+        type="watch-app"
+        name="@Strings.AppName"
+        entry="MusicControlApp"
+        launcherIcon="@Drawables.LauncherIcon"
+        minApiLevel="3.3.0">
+
+        <iq:products>
+            <iq:product id="edge830"/>
+        </iq:products>
+
+        <iq:permissions>
+            <iq:uses-permission id="Communications"/>
+        </iq:permissions>
+
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+
+        <iq:barrels/>
+
+    </iq:application>
+
+</iq:manifest>

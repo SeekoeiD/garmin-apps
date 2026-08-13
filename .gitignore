@@ -1,0 +1,15 @@
+# Local toolchains (Connect IQ SDK, Gradle) and the CIQ signing key live here
+/tools/
+
+# Connect IQ build output
+edge-app/bin/
+
+# Android build output and machine-local config
+android-companion/.gradle/
+android-companion/build/
+android-companion/app/build/
+android-companion/local.properties
+
+# IDE
+.idea/
+*.iml
