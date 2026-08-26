@@ -1,0 +1,3 @@
+<properties>
+    <property id="deviceName" type="string"></property>
+</properties>

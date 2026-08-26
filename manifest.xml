@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
+
+    <iq:application
+        id="3a6a2645883f4e378e28c984fde94e0d"
+        type="watch-app"
+        name="@Strings.AppName"
+        entry="TreadmillApp"
+        launcherIcon="@Drawables.LauncherIcon"
+        minApiLevel="3.3.0">
+
+        <iq:products>
+            <iq:product id="fr965"/>
+        </iq:products>
+
+        <iq:permissions>
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+            <iq:uses-permission id="Fit"/>
+            <iq:uses-permission id="FitContributor"/>
+            <iq:uses-permission id="Sensor"/>
+        </iq:permissions>
+
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+
+        <iq:barrels/>
+
+    </iq:application>
+
+</iq:manifest>

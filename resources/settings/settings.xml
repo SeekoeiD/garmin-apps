@@ -1,0 +1,5 @@
+<settings>
+    <setting propertyKey="@Properties.deviceName" title="@Strings.SettingDeviceName">
+        <settingConfig type="alphaNumeric" maxLength="24" />
+    </setting>
+</settings>

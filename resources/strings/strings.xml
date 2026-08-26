@@ -1,0 +1,4 @@
+<strings>
+    <string id="AppName">Treadmill Link</string>
+    <string id="SettingDeviceName">Treadmill BLE name (blank = auto)</string>
+</strings>
