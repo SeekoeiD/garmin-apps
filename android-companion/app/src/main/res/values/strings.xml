@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Edge Music Control</string>
+    <string name="app_name">Garmin Services</string>
 
-    <string name="heading">Edge Music Control</string>
+    <string name="heading">Garmin Services</string>
     <string name="subheading">Music remote for a Garmin Edge 830 and treadmill run uploads for a Forerunner 965, over Connect IQ.</string>
 
     <string name="step_notification_access">1. Notification access</string>
