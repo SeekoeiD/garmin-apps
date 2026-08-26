@@ -81,14 +81,15 @@ def make_dockerfile():
     return '\n'.join(lines)
 
 
-def garmin_tokens():
-    """Serialize the local token store to the JSON string the library loads."""
+def garmin_tokens_b64():
+    """Token JSON, base64-wrapped: Coolify injects env vars into the
+    Dockerfile as ARG lines, where raw JSON breaks the syntax."""
     sys.path.insert(0, HERE)
     from treadmill_sync import connect
 
     client = connect()
 
-    return client.client.dumps()
+    return base64.b64encode(client.client.dumps().encode('utf-8')).decode('ascii')
 
 
 def load_state():
@@ -220,7 +221,7 @@ def main():
 
     print('setting env vars (values not shown)')
     set_env(app_uuid, 'TREADMILL_TOKEN', shared)
-    set_env(app_uuid, 'GARMINTOKENS', garmin_tokens())
+    set_env(app_uuid, 'GARMINTOKENS_B64', garmin_tokens_b64())
     set_env(app_uuid, 'TZ_OFFSET_SECONDS', '7200')
     set_env(app_uuid, 'DATA_DIR', '/data')
 

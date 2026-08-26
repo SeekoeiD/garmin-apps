@@ -2,12 +2,6 @@
     <setting propertyKey="@Properties.deviceName" title="@Strings.SettingDeviceName">
         <settingConfig type="alphaNumeric" maxLength="24" />
     </setting>
-    <setting propertyKey="@Properties.serverUrl" title="@Strings.SettingServerUrl">
-        <settingConfig type="alphaNumeric" maxLength="120" />
-    </setting>
-    <setting propertyKey="@Properties.serverToken" title="@Strings.SettingServerToken">
-        <settingConfig type="alphaNumeric" maxLength="64" />
-    </setting>
     <setting propertyKey="@Properties.recordMode" title="@Strings.SettingRecordMode">
         <settingConfig type="list">
             <listEntry value="0">@Strings.RecordModeCloud</listEntry>

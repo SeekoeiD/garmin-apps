@@ -188,6 +188,19 @@ def collect_samples(sid):
     return samples, len(chunks)
 
 
+def garmin_tokenstore():
+    """Deploy passes the token JSON base64-encoded: Coolify injects env vars
+    into the Dockerfile as ARG lines, where raw JSON is a syntax error."""
+    b64 = os.environ.get('GARMINTOKENS_B64')
+
+    if b64:
+        import base64
+
+        return base64.b64decode(b64).decode('utf-8')
+
+    return os.environ.get('GARMINTOKENS') or None
+
+
 def garmin_client():
     global _client
 
@@ -195,7 +208,7 @@ def garmin_client():
         from garminconnect import Garmin
 
         client = Garmin()
-        client.login(tokenstore=os.environ.get('GARMINTOKENS') or None)
+        client.login(tokenstore=garmin_tokenstore())
         _client = client
 
     return _client

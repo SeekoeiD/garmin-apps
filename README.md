@@ -155,6 +155,32 @@ Connect the FR965 over USB and copy `bin\TreadmillLink.prg` into
 `GARMIN\Apps\` on the device, then eject. The app appears in the activity /
 app list.
 
+## v3: phone-upload pipeline (current)
+
+The watch no longer records a FIT at all. In the default cloud mode it records
+the run compactly (speed/incline change-points + one HR byte per second - a
+90-minute run is a few KB), and at save transmits it to the Android companion
+app (the edge-music-control APK) over Connect IQ phone messaging. The phone
+expands the run back to 1 Hz, builds the FIT natively in Kotlin - a port of
+server/fit_builder.py, verified byte-for-byte against
+server/testdata_reference.fit - and uploads it to Garmin Connect with OAuth
+tokens pasted into the app once. Garmin syncs the activity onward to Strava
+and back to the watch's own history.
+
+Wire protocol: "tl_run" parts (part 0 = header + change lists, later parts =
+1500 HR values each), replied to with "tl_result". Runs are keyed by their
+start epoch; the phone dedupes on it, so watch-side retries are always safe.
+An unreachable phone at save time parks the run in watch storage for the
+menu's "Retry upload".
+
+Legacy on-watch recording (v1, nativeNum developer fields) remains selectable
+via the recordMode setting.
+
+The server/ directory is the v2 HTTP collector, kept as the reference
+implementation and test-vector generator for the Kotlin port. It is not
+deployed anywhere: no machine on the network has public HTTPS ingress (the
+UniFi gateway owns 443; port 80 is firewalled), which is what forced v3.
+
 ## Correcting activities
 
 `tools/` replaces the broken activity in Garmin Connect with a corrected one.

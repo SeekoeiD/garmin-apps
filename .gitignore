@@ -10,3 +10,5 @@ tools/__pycache__/
 *.fit
 *.debug.xml
 tools/deploy_state.json
+tools/phone_tokens.json
+!server/testdata_reference.fit

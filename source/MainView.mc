@@ -200,6 +200,12 @@ class MainView extends WatchUi.View {
             return uploader.hasPending() ? "UPLOAD PENDING - retry in menu" : null;
         }
 
+        // Recorded but not sealed yet - the run has not been handed to the
+        // phone, so there is no progress to report.
+        if (uploader.state != Uploader.STATE_FLUSHING) {
+            return null;
+        }
+
         var total = uploader.chunksSent + uploader.pendingChunks();
 
         return "UP " + uploader.chunksSent.toString() + "/" + total.toString();
@@ -371,13 +377,19 @@ class MainView extends WatchUi.View {
             "alt " + _recorder.altitudeM.format("%.1f")
                 + "  asc " + _recorder.ascentM.format("%.1f"),
             "up " + (uploader == null ? "off" : uploader.stateLabel())
-                + "  sid " + (uploader == null ? "-" : fmt(uploader.sessionId)),
+                + "  k " + (uploader == null ? "-" : uploader.runKey().toString()),
             uploader == null ? "" :
-                "chk " + uploader.chunksSent.toString() + "/" + uploader.pendingChunks().toString()
-                    + "  buf " + uploader.samplesBuffered().toString()
-                    + "  http " + uploader.lastCode.toString()
+                "prt " + uploader.chunksSent.toString() + "/" + uploader.pendingChunks().toString()
+                    + "  dur " + uploader.samplesBuffered().toString()
+                    + "  rc " + uploader.lastCode.toString()
                     + (uploader.overflow ? " OVF" : "")
         ];
+
+        // Only worth a line of its own when there is something to say, since
+        // the scanned device names below need the space the rest of the time.
+        if (uploader != null && uploader.lastError.length() > 0) {
+            lines.add("err " + uploader.lastError);
+        }
 
         for (var i = 0; i < lines.size(); i += 1) {
             dc.drawText(cx, y, Graphics.FONT_XTINY, lines[i], Graphics.TEXT_JUSTIFY_CENTER);

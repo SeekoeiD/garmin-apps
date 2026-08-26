@@ -4,19 +4,46 @@ using Toybox.Communications;
 using Toybox.Lang;
 using Toybox.Time;
 
-typedef WebCallback as Method(responseCode as Lang.Number,
-    data as Lang.Dictionary or Lang.String or Null) as Void;
+typedef PhoneCallback as Method(msg as Communications.PhoneAppMessage) as Void;
 
-//! Streams the run to a server that assembles and uploads the FIT centrally.
+//! Reports the outcome of one Communications.transmit back to the uploader.
 //!
-//! On-watch recording could only express treadmill elevation through
-//! developer fields with :nativeNum, which Garmin Connect and Strava ignore,
-//! so the watch now ships raw samples and the server owns the FIT.
+//! The generation number is what makes a late callback harmless: anything that
+//! resets or abandons the transmit sequence bumps the uploader's generation, so
+//! a reply belonging to a run that has been thrown away is swallowed instead of
+//! advancing the part counter of the run that replaced it.
+class PartListener extends Communications.ConnectionListener {
+
+    private var _uploader as Uploader;
+    private var _gen as Lang.Number;
+
+    function initialize(uploader as Uploader, gen as Lang.Number) {
+        Communications.ConnectionListener.initialize();
+        _uploader = uploader;
+        _gen = gen;
+    }
+
+    function onComplete() as Void {
+        _uploader.onPartSent(_gen);
+    }
+
+    function onError() as Void {
+        _uploader.onPartFailed(_gen);
+    }
+}
+
+//! Records the run compactly on the watch, then hands it to the Android
+//! companion over the Connect IQ phone channel, which builds the FIT and
+//! uploads it to Garmin. There is no HTTP anywhere: the watch talks only to the
+//! paired phone.
 //!
-//! Everything is buffered: samples accumulate into fixed-size chunks, at most
-//! one request is in flight at a time, and failures back off and retry. If the
-//! phone is out of reach when the run ends, the whole run is written to
-//! Application.Storage and can be replayed from the menu on a later launch.
+//! On-watch FIT recording could only express treadmill elevation through
+//! developer fields with :nativeNum, which Garmin Connect and Strava ignore, so
+//! the watch ships the run and the phone owns the FIT.
+//!
+//! Recording is change-point encoded - speed and incline are stored only when
+//! they change, heart rate once per second - so a 90 minute run is a few KB and
+//! survives being parked in Application.Storage when the phone is out of reach.
 class Uploader {
 
     enum {
@@ -28,44 +55,65 @@ class Uploader {
         STATE_FAILED
     }
 
-    const CHUNK = 120;          // samples per POST; ~2-3 KB of JSON
-    const MAX_SAMPLES = 14400;  // 4 h at 1 Hz, after which sampling stops
-    const MAX_BACKOFF = 60;     // seconds between retries, at the ceiling
-    const MAX_ATTEMPTS = 8;     // consecutive failures while flushing = give up
-    const REQUEST_TIMEOUT = 45; // seconds before a silent request is written off
+    // Wire protocol. The phone app is built against these exact strings.
+    const MSG_TYPE = "tl_run";
+    const RESULT_TYPE = "tl_result";
 
-    // lastCode values that did not come from the server.
+    const HR_CHUNK = 1500;      // HR values per part, and per Storage value
+    const MAX_DUR = 14400;      // 4 h at 1 Hz, after which sampling stops
+    const MAX_BACKOFF = 60;     // seconds between retries, at the ceiling
+    const MAX_ATTEMPTS = 8;     // consecutive transmit failures = give up
+    const RESULT_TIMEOUT = 90;  // seconds to wait for the phone's verdict
+
+    //! lastCode, shown on the debug page:
+    //!   0 nothing has happened yet
+    //!   1 every part delivered, waiting for the phone's verdict
+    //!   2 the phone confirmed the upload
+    //!  -1 Communications.transmit threw
+    //!  -2 transmit reported onError
+    //!  -3 no tl_result within RESULT_TIMEOUT
+    //!  -4 the phone answered ok=false; see lastError
+    const CODE_NONE = 0;
+    const CODE_WAITING = 1;
+    const CODE_OK = 2;
     const CODE_THREW = -1;
-    const CODE_TIMEOUT = -2;
+    const CODE_TX_FAILED = -2;
+    const CODE_TIMEOUT = -3;
+    const CODE_REJECTED = -4;
 
     const KEY_INDEX = "pend_index";
-    const DEFAULT_URL = "https://treadmill.156.155.98.24.sslip.io";
-    const DEFAULT_TOKEN = "0709deaee949c66863e9352f296e1dbf";
 
     var state as Lang.Number = STATE_IDLE;
-    var sessionId as Lang.String or Null = null;
-    var chunksSent as Lang.Number = 0;
-    var lastCode as Lang.Number = 0;
 
-    // Set once the sample buffer hits MAX_SAMPLES; surfaced on the debug page.
+    // Parts the phone has acknowledged receipt of, out of the sealed part list.
+    var chunksSent as Lang.Number = 0;
+    var lastCode as Lang.Number = CODE_NONE;
+    var lastError as Lang.String = "";
+
+    // Set once the run hits MAX_DUR; surfaced on the debug page.
     var overflow as Lang.Boolean = false;
 
-    // From the finish response, for the "UPLOADED" line.
+    // From the phone's tl_result, for the "UPLOADED" line.
     var finishDistanceM as Lang.Float or Null = null;
     var finishAscentM as Lang.Float or Null = null;
 
-    private var _samples as Lang.Array = [];   // the chunk still filling up
-    private var _pending as Lang.Array = [];   // sealed chunks awaiting a POST
-    private var _inFlight as Lang.Boolean = false;
-    private var _inFlightAge as Lang.Number = 0;
+    // The run's identity key: the start epoch, which the phone dedupes on.
+    private var _k as Lang.Number = 0;
+    private var _alt as Lang.Float or Null = null;
+    private var _dur as Lang.Number = 0;
 
-    // Callbacks belonging to requests already written off as timed out, which
-    // must be swallowed so a late reply cannot double-count a chunk.
-    private var _stale as Lang.Number = 0;
-    private var _finishSent as Lang.Boolean = false;
-    private var _startEpoch as Lang.Number = 0;
-    private var _startAlt as Lang.Float or Null = null;
-    private var _seq as Lang.Number = 0;
+    // Change points as [sec, value] pairs, and one HR reading per second held
+    // in chunks of at most HR_CHUNK so no single Storage value gets large.
+    private var _sp as Lang.Array = [];
+    private var _inc as Lang.Array = [];
+    private var _hrChunks as Lang.Array = [];
+
+    private var _parts as Lang.Array = [];
+    private var _txActive as Lang.Boolean = false;
+    private var _gen as Lang.Number = 0;
+
+    private var _awaitResult as Lang.Boolean = false;
+    private var _resultAge as Lang.Number = 0;
     private var _wait as Lang.Number = 0;      // ticks left before the next try
     private var _backoff as Lang.Number = 1;
     private var _attempts as Lang.Number = 0;
@@ -73,82 +121,79 @@ class Uploader {
     function initialize() {
     }
 
-    //! Open a server session for a run starting now.
+    //! Begin a run starting now. The start epoch doubles as the run's key.
     function start() as Void {
         reset();
-        _startEpoch = Time.now().value();
+        _k = Time.now().value();
 
         var info = Activity.getActivityInfo();
 
         if (info != null && info.altitude != null) {
-            _startAlt = info.altitude;
+            _alt = info.altitude;
         }
 
         state = STATE_STARTING;
-        pump();
     }
 
-    //! Buffer one second of run data. Samples keep accumulating through a
-    //! failed upload, so a dropped phone connection costs nothing.
+    //! Record one second of run data. Speed and incline only cost anything when
+    //! they change; heart rate is one small Number per second.
     function addSample(speedMps as Lang.Float, inclinePct as Lang.Float, hr as Lang.Number) as Void {
-        if (state == STATE_IDLE || state == STATE_DONE) {
+        if (state != STATE_STARTING && state != STATE_STREAMING) {
             return;
         }
 
-        if (samplesBuffered() >= MAX_SAMPLES) {
+        state = STATE_STREAMING;
+
+        if (_dur >= MAX_DUR) {
             overflow = true;
+
             return;
         }
 
-        _samples.add([r2(speedMps), r2(inclinePct), hr]);
+        var sec = _dur;
 
-        if (_samples.size() >= CHUNK) {
-            sealChunk();
-        }
+        appendChange(_sp, sec, scaled(speedMps, 100.0));
+        appendChange(_inc, sec, scaled(inclinePct, 10.0));
+        appendHr(hr);
 
-        pump();
+        _dur += 1;
     }
 
-    //! One second of wall clock: retries are paced off this, not off a timer
-    //! of its own.
+    //! One second of wall clock: retry pacing and the result-wait timeout are
+    //! driven from here rather than from a timer of their own.
     function tick() as Void {
         if (_wait > 0) {
             _wait -= 1;
         }
 
-        // A request whose callback never arrives would otherwise wedge the
-        // pipeline for good, leaving the run neither uploaded nor stored.
-        if (_inFlight) {
-            _inFlightAge += 1;
+        // Every part landed but the phone never answered. Without this the run
+        // would sit in FLUSHING for ever, neither uploaded nor stored.
+        if (_awaitResult) {
+            _resultAge += 1;
 
-            if (_inFlightAge >= REQUEST_TIMEOUT) {
-                _inFlight = false;
-                _inFlightAge = 0;
-                _finishSent = false;
-                _stale += 1;
+            if (_resultAge >= RESULT_TIMEOUT) {
                 lastCode = CODE_TIMEOUT;
-                backoff();
+                lastError = "no reply";
+                fail();
+
+                return;
             }
         }
 
         pump();
     }
 
-    //! Flush whatever is buffered, then close the session server-side.
+    //! Seal the run and start shipping it to the phone.
     function finish() as Void {
-        if (state == STATE_IDLE || state == STATE_DONE) {
+        if (state != STATE_STARTING && state != STATE_STREAMING) {
             return;
         }
 
-        sealChunk();
-        state = STATE_FLUSHING;
-        _attempts = 0;
-        _backoff = 1;
-        _wait = 0;
-        pump();
+        _parts = buildParts();
+        beginTransmit();
     }
 
-    //! Drop the run entirely: no server finish, no stored leftovers.
+    //! Drop the run entirely: nothing sent, no stored leftovers.
     function discard() as Void {
         reset();
         clearStorage();
@@ -169,13 +214,24 @@ class Uploader {
         return Application.Storage.getValue(KEY_INDEX) != null;
     }
 
-    //! Replay a stored run. If chunks already reached a server session that
-    //! session is resumed, because a new one would orphan them - the server
-    //! keys chunks by seq and recomputes totals at finish, so re-attaching is
-    //! both safe and idempotent. Only when there is no usable session id (or
-    //! the server has forgotten it) does a fresh one get created, carrying the
-    //! original start time.
+    //! Replay a stored run, keeping its original key. The phone dedupes on that
+    //! key, so resending every part - including any the phone already has - is
+    //! safe and is simpler than tracking which ones landed.
     function retry() as Lang.Boolean {
+        if (!loadPending()) {
+            return false;
+        }
+
+        _parts = buildParts();
+        beginTransmit();
+
+        return true;
+    }
+
+    //! Reload a stored run into memory without sending it. Split out of retry()
+    //! so the tests can check the storage round trip without opening a
+    //! transmit that would outlive them.
+    function loadPending() as Lang.Boolean {
         var raw = Application.Storage.getValue(KEY_INDEX);
 
         if (!(raw instanceof Lang.Dictionary)) {
@@ -183,69 +239,60 @@ class Uploader {
         }
 
         var index = raw as Lang.Dictionary;
-        var key = index["key"];
-        var startEpoch = index["start"];
-        var seqs = index["seqs"];
+        var k = index["k"];
+        var dur = index["dur"];
+        var sp = index["sp"];
+        var inc = index["inc"];
+        var count = index["hrChunks"];
 
-        if (key == null || !(startEpoch instanceof Lang.Number) || !(seqs instanceof Lang.Array)) {
+        if (!(k instanceof Lang.Number) || !(dur instanceof Lang.Number)
+            || !(sp instanceof Lang.Array) || !(inc instanceof Lang.Array)
+            || !(count instanceof Lang.Number)) {
             clearStorage();
 
             return false;
         }
 
-        reset();
-        _startEpoch = startEpoch;
-
-        var sid = index["sid"];
-
-        if (sid != null) {
-            sessionId = sid.toString();
-        }
-
+        var key = k as Lang.Number;
+        var chunks = count as Lang.Number;
         var alt = index["alt"];
 
+        reset();
+        _k = key;
+        _dur = dur as Lang.Number;
+        _sp = sp as Lang.Array;
+        _inc = inc as Lang.Array;
+
         if (alt instanceof Lang.Float) {
-            _startAlt = alt;
+            _alt = alt as Lang.Float;
         }
 
-        var list = seqs as Lang.Array;
+        for (var j = 0; j < chunks; j += 1) {
+            var hr = Application.Storage.getValue(hrKey(key, j));
 
-        for (var i = 0; i < list.size(); i += 1) {
-            var seq = list[i] as Lang.Number;
-            var samples = Application.Storage.getValue(chunkKey(key.toString(), seq));
-
-            if (samples instanceof Lang.Array) {
-                var chunk = {} as Lang.Dictionary;
-                chunk["seq"] = seq;
-                chunk["s"] = samples;
-                _pending.add(chunk);
-
-                if (seq >= _seq) {
-                    _seq = seq + 1;
-                }
+            if (hr instanceof Lang.Array) {
+                _hrChunks.add(hr);
             }
         }
-
-        state = STATE_FLUSHING;
-        pump();
 
         return true;
     }
 
+    //! Seconds recorded, which is also the length of the HR series.
     function samplesBuffered() as Lang.Number {
-        var total = _samples.size();
-
-        for (var i = 0; i < _pending.size(); i += 1) {
-            var chunk = _pending[i] as Lang.Dictionary;
-            var s = chunk["s"] as Lang.Array;
-            total += s.size();
-        }
-
-        return total;
+        return _dur;
     }
 
+    //! The run's identity key, 0 when there is no run. On the debug page.
+    function runKey() as Lang.Number {
+        return _k;
+    }
+
+    //! Parts the phone has not acknowledged yet.
     function pendingChunks() as Lang.Number {
-        return _pending.size();
+        var left = _parts.size() - chunksSent;
+
+        return (left > 0) ? left : 0;
     }
 
     //! True when nothing is outstanding, so the app may exit.
@@ -267,166 +314,165 @@ class Uploader {
         return "IDLE";
     }
 
-    //! Drive the one-request-at-a-time pipeline: open the session, drain the
-    //! chunk queue, then finish. Called after every event that could unblock it.
-    private function pump() as Void {
-        if (_inFlight || _wait > 0) {
-            return;
+    //! The run as it goes on the wire: a head part carrying the change lists,
+    //! then one part per HR chunk. Public so the tests can inspect the exact
+    //! payload the phone is built against.
+    function buildParts() as Lang.Array {
+        var n = 1 + _hrChunks.size();
+        var parts = [] as Lang.Array;
+
+        var head = {} as Lang.Dictionary;
+        head["t"] = MSG_TYPE;
+        head["k"] = _k;
+        head["i"] = 0;
+        head["n"] = n;
+        head["start"] = _k;
+
+        if (_alt != null) {
+            head["alt"] = _alt;
         }
 
-        if (state == STATE_IDLE || state == STATE_DONE || state == STATE_FAILED) {
-            return;
+        head["dur"] = _dur;
+        head["sp"] = _sp;
+        head["inc"] = _inc;
+        parts.add(head);
+
+        for (var j = 0; j < _hrChunks.size(); j += 1) {
+            var part = {} as Lang.Dictionary;
+            part["t"] = MSG_TYPE;
+            part["k"] = _k;
+            part["i"] = j + 1;
+            part["n"] = n;
+            part["hr"] = _hrChunks[j];
+            parts.add(part);
         }
 
-        if (sessionId == null) {
-            postStart();
-
-            return;
-        }
-
-        if (_pending.size() > 0) {
-            postChunk();
-
-            return;
-        }
-
-        if (state == STATE_FLUSHING && !_finishSent) {
-            postFinish();
-        }
+        return parts;
     }
 
-    private function postStart() as Void {
-        var body = {} as Lang.Dictionary;
-        body["start"] = _startEpoch;
+    //! The phone's verdict on a run. Everything here is untrusted input: any
+    //! key may be absent, null or the wrong type, and none of that may throw.
+    //! Public so the app-level phone message callback can forward to it.
+    function onPhoneMessage(msg as Communications.PhoneAppMessage) as Void {
+        var data = msg.data;
 
-        if (_startAlt != null) {
-            body["alt"] = _startAlt;
-        }
-
-        send(baseUrl() + "/v1/session", body, method(:onStartResponse));
-    }
-
-    private function postChunk() as Void {
-        var chunk = _pending[0] as Lang.Dictionary;
-        var body = {} as Lang.Dictionary;
-        body["seq"] = chunk["seq"];
-        body["s"] = chunk["s"];
-
-        send(baseUrl() + "/v1/session/" + sessionId + "/samples", body, method(:onChunkResponse));
-    }
-
-    private function postFinish() as Void {
-        _finishSent = true;
-        send(baseUrl() + "/v1/session/" + sessionId + "/finish", {} as Lang.Dictionary,
-            method(:onFinishResponse));
-    }
-
-    function onStartResponse(responseCode as Lang.Number, data as Lang.Dictionary or Lang.String or Null) as Void {
-        if (!accept()) {
+        if (!(data instanceof Lang.Dictionary)) {
             return;
         }
 
-        lastCode = responseCode;
+        var dict = data as Lang.Dictionary;
+        var type = dict["t"];
 
-        if (responseCode == 200 && data instanceof Lang.Dictionary) {
-            var id = (data as Lang.Dictionary)["id"];
-
-            if (id != null) {
-                sessionId = id.toString();
-                succeeded();
-
-                if (state == STATE_STARTING) {
-                    state = STATE_STREAMING;
-                }
-
-                pump();
-
-                return;
-            }
-        }
-
-        backoff();
-    }
-
-    function onChunkResponse(responseCode as Lang.Number, data as Lang.Dictionary or Lang.String or Null) as Void {
-        if (!accept()) {
+        if (!(type instanceof Lang.String) || !(type as Lang.String).equals(RESULT_TYPE)) {
             return;
         }
 
-        lastCode = responseCode;
-
-        if (responseCode == 200) {
-            if (_pending.size() > 0) {
-                _pending = _pending.slice(1, null);
-            }
-
-            chunksSent += 1;
-            succeeded();
-            pump();
-
+        // A verdict is only interesting for the run currently being sent, or
+        // for one that has just been written off - a late success still means
+        // the run reached Garmin, and clearing storage saves a pointless retry.
+        if (_k == 0 || (state != STATE_FLUSHING && state != STATE_FAILED)) {
             return;
         }
 
-        if (responseCode == 404) {
-            sessionGone();
+        var key = dict["k"];
 
+        if (!(key instanceof Lang.Number) || (key as Lang.Number) != _k) {
             return;
         }
 
-        backoff();
-    }
+        var ok = dict["ok"];
 
-    function onFinishResponse(responseCode as Lang.Number, data as Lang.Dictionary or Lang.String or Null) as Void {
-        if (!accept()) {
-            return;
-        }
-
-        lastCode = responseCode;
-
-        if (responseCode == 200) {
-            if (data instanceof Lang.Dictionary) {
-                var d = data as Lang.Dictionary;
-                finishDistanceM = floatFrom(d["distance"]);
-                finishAscentM = floatFrom(d["ascent"]);
-            }
-
+        if (ok instanceof Lang.Boolean && (ok as Lang.Boolean)) {
+            finishDistanceM = floatFrom(dict["dist"]);
+            finishAscentM = floatFrom(dict["asc"]);
+            lastCode = CODE_OK;
+            lastError = "";
+            settle();
             state = STATE_DONE;
             clearStorage();
 
             return;
         }
 
-        _finishSent = false;
+        lastCode = CODE_REJECTED;
+        lastError = textFrom(dict["err"]);
+        fail();
+    }
 
-        if (responseCode == 404) {
-            sessionGone();
+    //! Transmit callback. Public because the listener is a separate class.
+    function onPartSent(gen as Lang.Number) as Void {
+        if (!claim(gen)) {
+            return;
+        }
+
+        chunksSent += 1;
+        succeeded();
+
+        if (chunksSent >= _parts.size()) {
+            lastCode = CODE_WAITING;
+            _awaitResult = true;
+            _resultAge = 0;
 
             return;
         }
 
+        pump();
+    }
+
+    //! Transmit callback. Public because the listener is a separate class.
+    function onPartFailed(gen as Lang.Number) as Void {
+        if (!claim(gen)) {
+            return;
+        }
+
+        lastCode = CODE_TX_FAILED;
         backoff();
     }
 
-    //! The server has no record of this session - it was resumed against a id
-    //! that has since been cleaned up. Drop it so pump() opens a fresh one and
-    //! replays whatever is still buffered.
-    private function sessionGone() as Void {
-        sessionId = null;
-        _finishSent = false;
-        backoff();
+    //! Send the next undelivered part. Strictly one at a time: the phone
+    //! assembles parts in order and a burst would race its own acknowledgements.
+    private function pump() as Void {
+        if (_txActive || _wait > 0 || _awaitResult || state != STATE_FLUSHING) {
+            return;
+        }
+
+        if (chunksSent >= _parts.size()) {
+            return;
+        }
+
+        _gen += 1;
+        _txActive = true;
+
+        try {
+            Communications.transmit(_parts[chunksSent], null, new PartListener(self, _gen));
+        } catch (e) {
+            _txActive = false;
+            lastCode = CODE_THREW;
+            backoff();
+        }
     }
 
-    //! Claim a callback for the request currently in flight, or swallow it as
-    //! the late reply to one already written off.
-    private function accept() as Lang.Boolean {
-        if (_stale > 0) {
-            _stale -= 1;
+    private function beginTransmit() as Void {
+        state = STATE_FLUSHING;
+        chunksSent = 0;
+        lastCode = CODE_NONE;
+        lastError = "";
+        finishDistanceM = null;
+        finishAscentM = null;
+        _awaitResult = false;
+        _resultAge = 0;
+        succeeded();
+        pump();
+    }
 
+    //! Claim a callback for the transmit currently in flight, or swallow it as
+    //! the late reply to one already abandoned.
+    private function claim(gen as Lang.Number) as Lang.Boolean {
+        if (!_txActive || gen != _gen) {
             return false;
         }
 
-        _inFlight = false;
-        _inFlightAge = 0;
+        _txActive = false;
 
         return true;
     }
@@ -437,79 +483,109 @@ class Uploader {
         _wait = 0;
     }
 
-    //! Exponential backoff. Giving up is only an option once the run is over:
-    //! mid-run the phone is often simply out of range and everything is still
-    //! buffered, so streaming retries indefinitely.
+    //! Exponential backoff, 1 2 4 ... 60 s. The sequence only ends after
+    //! MAX_ATTEMPTS consecutive failures, at which point the run goes to
+    //! storage and the menu's retry is the way back in.
     private function backoff() as Void {
         _attempts += 1;
+        _wait = _backoff;
         _backoff *= 2;
 
         if (_backoff > MAX_BACKOFF) {
             _backoff = MAX_BACKOFF;
         }
 
-        _wait = _backoff;
-
-        if (state == STATE_FLUSHING && _attempts >= MAX_ATTEMPTS) {
-            persist();
-            state = STATE_FAILED;
+        if (_attempts >= MAX_ATTEMPTS) {
+            fail();
         }
     }
 
-    private function sealChunk() as Void {
-        if (_samples.size() == 0) {
-            return;
-        }
-
-        var chunk = {} as Lang.Dictionary;
-        chunk["seq"] = _seq;
-        chunk["s"] = _samples;
-        _pending.add(chunk);
-        _seq += 1;
-        _samples = [];
+    //! Park the run in storage and stop trying.
+    private function fail() as Void {
+        persist();
+        settle();
+        state = STATE_FAILED;
     }
 
-    //! Storage values have to stay small, so each chunk is its own key and the
-    //! index carries only the seq numbers.
+    //! Stop expecting anything from the transmit currently outstanding.
+    private function settle() as Void {
+        _gen += 1;
+        _txActive = false;
+        _awaitResult = false;
+        _resultAge = 0;
+        _wait = 0;
+    }
+
+    private function appendChange(list as Lang.Array, sec as Lang.Number, value as Lang.Number) as Void {
+        if (list.size() > 0) {
+            var last = list[list.size() - 1] as Lang.Array;
+
+            if ((last[1] as Lang.Number) == value) {
+                return;
+            }
+        }
+
+        list.add([sec, value]);
+    }
+
+    //! One reading per second, 0 for unknown, kept in bounded chunks that map
+    //! straight onto the wire parts and onto individual Storage values.
+    private function appendHr(hr as Lang.Number) as Void {
+        var v = hr;
+
+        if (v < 0) {
+            v = 0;
+        }
+
+        if (v > 255) {
+            v = 255;
+        }
+
+        var chunk = null;
+
+        if (_hrChunks.size() > 0) {
+            chunk = _hrChunks[_hrChunks.size() - 1] as Lang.Array;
+        }
+
+        if (chunk == null || chunk.size() >= HR_CHUNK) {
+            chunk = [] as Lang.Array;
+            _hrChunks.add(chunk);
+        }
+
+        chunk.add(v);
+    }
+
+    //! Storage values have to stay small, so each HR chunk is its own key and
+    //! the index carries only how many there are.
     private function persist() as Void {
-        sealChunk();
-
-        // A run that never buffered or sent a sample is not worth keeping, and
-        // storing it would leave the retry prompt up for nothing.
-        if (chunksSent == 0 && _pending.size() == 0) {
+        // A run with nothing in it is not worth keeping, and storing it would
+        // leave the retry prompt up for nothing.
+        if (_dur == 0) {
             clearStorage();
 
             return;
         }
 
-        var key = _startEpoch.toString();
-        var seqs = [] as Lang.Array;
-
         try {
-            for (var i = 0; i < _pending.size(); i += 1) {
-                var chunk = _pending[i] as Lang.Dictionary;
-                var seq = chunk["seq"] as Lang.Number;
-
-                Application.Storage.setValue(chunkKey(key, seq), chunk["s"]);
-                seqs.add(seq);
+            for (var j = 0; j < _hrChunks.size(); j += 1) {
+                Application.Storage.setValue(hrKey(_k, j), _hrChunks[j]);
             }
 
             var index = {} as Lang.Dictionary;
-            index["key"] = key;
-            index["start"] = _startEpoch;
-            index["seqs"] = seqs;
+            index["k"] = _k;
+            index["dur"] = _dur;
 
-            if (sessionId != null) {
-                index["sid"] = sessionId;
+            if (_alt != null) {
+                index["alt"] = _alt;
             }
 
-            if (_startAlt != null) {
-                index["alt"] = _startAlt;
-            }
+            index["sp"] = _sp;
+            index["inc"] = _inc;
+            index["hrChunks"] = _hrChunks.size();
 
             Application.Storage.setValue(KEY_INDEX, index);
         } catch (e) {
-            // Storage full or value too large: the run is lost either way,
+            // Storage full or a value too large: the run is lost either way,
             // and throwing out of a save would be worse.
         }
     }
@@ -519,106 +595,64 @@ class Uploader {
 
         if (raw instanceof Lang.Dictionary) {
             var index = raw as Lang.Dictionary;
-            var key = index["key"];
-            var seqs = index["seqs"];
+            var k = index["k"];
+            var count = index["hrChunks"];
 
-            if (key != null && seqs instanceof Lang.Array) {
-                var list = seqs as Lang.Array;
+            if (k instanceof Lang.Number && count instanceof Lang.Number) {
+                var key = k as Lang.Number;
+                var chunks = count as Lang.Number;
 
-                for (var i = 0; i < list.size(); i += 1) {
-                    Application.Storage.deleteValue(chunkKey(key.toString(), list[i] as Lang.Number));
+                for (var j = 0; j < chunks; j += 1) {
+                    Application.Storage.deleteValue(hrKey(key, j));
                 }
             }
+
+            clearLegacy(index);
         }
 
         Application.Storage.deleteValue(KEY_INDEX);
     }
 
-    private function reset() as Void {
-        // Anything still in flight belongs to the run being thrown away, so
-        // its callback must not be allowed to touch the new one.
-        var carry = _stale + (_inFlight ? 1 : 0);
+    //! A watch upgraded from the streaming build can still hold a pending run
+    //! in the old shape, whose sample chunks would otherwise be orphaned in
+    //! storage for good.
+    private function clearLegacy(index as Lang.Dictionary) as Void {
+        var key = index["key"];
+        var seqs = index["seqs"];
 
+        if (key == null || !(seqs instanceof Lang.Array)) {
+            return;
+        }
+
+        var list = seqs as Lang.Array;
+
+        for (var i = 0; i < list.size(); i += 1) {
+            Application.Storage.deleteValue("pend_" + key.toString() + "_" + list[i].toString());
+        }
+    }
+
+    private function reset() as Void {
+        settle();
         state = STATE_IDLE;
-        sessionId = null;
         chunksSent = 0;
-        lastCode = 0;
+        lastCode = CODE_NONE;
+        lastError = "";
         overflow = false;
         finishDistanceM = null;
         finishAscentM = null;
-        _samples = [];
-        _pending = [];
-        _inFlight = false;
-        _inFlightAge = 0;
-        _stale = carry;
-        _finishSent = false;
-        _startEpoch = 0;
-        _startAlt = null;
-        _seq = 0;
-        _wait = 0;
+        _k = 0;
+        _alt = null;
+        _dur = 0;
+        _sp = [];
+        _inc = [];
+        _hrChunks = [];
+        _parts = [];
         _backoff = 1;
         _attempts = 0;
     }
 
-    private function send(
-        url as Lang.String,
-        body as Lang.Dictionary,
-        callback as WebCallback
-    ) as Void {
-        var options = {
-            :method => Communications.HTTP_REQUEST_METHOD_POST,
-            :headers => {
-                "X-Token" => token(),
-                "Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON
-            },
-            :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
-        };
-
-        _inFlight = true;
-        _inFlightAge = 0;
-
-        try {
-            Communications.makeWebRequest(url, body, options, callback);
-        } catch (e) {
-            _inFlight = false;
-            lastCode = CODE_THREW;
-            backoff();
-        }
-    }
-
-    private function chunkKey(sessionKey as Lang.String, seq as Lang.Number) as Lang.String {
-        return "pend_" + sessionKey + "_" + seq.toString();
-    }
-
-    private function baseUrl() as Lang.String {
-        var v = property("serverUrl", DEFAULT_URL);
-
-        // A trailing slash would produce "//v1/session".
-        if (v.length() > 0 && v.substring(v.length() - 1, v.length()).equals("/")) {
-            return v.substring(0, v.length() - 1);
-        }
-
-        return v;
-    }
-
-    private function token() as Lang.String {
-        return property("serverToken", DEFAULT_TOKEN);
-    }
-
-    private function property(key as Lang.String, fallback as Lang.String) as Lang.String {
-        var v = null;
-
-        try {
-            v = Application.Properties.getValue(key);
-        } catch (e) {
-            v = null;
-        }
-
-        if (v == null || !(v instanceof Lang.String) || (v as Lang.String).length() == 0) {
-            return fallback;
-        }
-
-        return v as Lang.String;
+    private function hrKey(k as Lang.Number, j as Lang.Number) as Lang.String {
+        return "pend_hr_" + k.toString() + "_" + j.toString();
     }
 
     private function floatFrom(v as Lang.Object or Null) as Lang.Float or Null {
@@ -637,11 +671,18 @@ class Uploader {
         return null;
     }
 
-    //! Two decimals is all the payload needs, and it keeps the JSON short.
-    private function r2(v as Lang.Float) as Lang.Float {
-        var scaled = v * 100.0;
-        var n = (scaled < 0) ? (scaled - 0.5).toNumber() : (scaled + 0.5).toNumber();
+    private function textFrom(v as Lang.Object or Null) as Lang.String {
+        if (v == null) {
+            return "?";
+        }
 
-        return n / 100.0;
+        return v.toString();
+    }
+
+    //! Round to a fixed-point integer, which is all the wire carries.
+    private function scaled(v as Lang.Float, factor as Lang.Float) as Lang.Number {
+        var x = v * factor;
+
+        return (x < 0) ? (x - 0.5).toNumber() : (x + 0.5).toNumber();
     }
 }

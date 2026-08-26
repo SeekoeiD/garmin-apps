@@ -1,5 +1,6 @@
 using Toybox.Application;
 using Toybox.BluetoothLowEnergy as Ble;
+using Toybox.Communications;
 using Toybox.Lang;
 using Toybox.WatchUi;
 
@@ -8,6 +9,10 @@ class TreadmillApp extends Application.AppBase {
     var client as FtmsClient or Null = null;
     var recorder as Recorder or Null = null;
     var uploader as Uploader or Null = null;
+
+    // Held on the instance because the mailbox registration outlives the call
+    // that made it.
+    private var _phoneMethod as PhoneCallback or Null = null;
 
     function initialize() {
         AppBase.initialize();
@@ -24,6 +29,13 @@ class TreadmillApp extends Application.AppBase {
 
         uploader = new Uploader();
 
+        // One mailbox for the whole app: the companion answers a finished run
+        // with a tl_result, and only the uploader knows what to make of it.
+        if (Communications has :registerForPhoneAppMessages) {
+            _phoneMethod = method(:onPhoneAppMessage);
+            Communications.registerForPhoneAppMessages(_phoneMethod);
+        }
+
         client = new FtmsClient(filter);
         recorder = new Recorder(uploader, recordMode());
 
@@ -38,8 +50,8 @@ class TreadmillApp extends Application.AppBase {
             recorder.save();
         }
 
-        // The finish request cannot complete once the app is gone, so park
-        // anything still outstanding in storage for a later retry.
+        // The transmit cannot complete once the app is gone, so park anything
+        // still outstanding in storage for a later retry.
         if (uploader != null) {
             uploader.persistIfUnfinished();
         }
@@ -47,6 +59,17 @@ class TreadmillApp extends Application.AppBase {
         if (client != null) {
             client.stopScan();
         }
+    }
+
+    //! Companion messages. Public because method(:onPhoneAppMessage) cannot
+    //! reach a private symbol.
+    function onPhoneAppMessage(msg as Communications.PhoneAppMessage) as Void {
+        if (uploader == null) {
+            return;
+        }
+
+        uploader.onPhoneMessage(msg);
+        WatchUi.requestUpdate();
     }
 
     private function recordMode() as Lang.Number {
