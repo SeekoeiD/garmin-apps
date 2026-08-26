@@ -1,0 +1,14 @@
+bin/
+tools/tokens/
+tools/archive/
+tools/processed.json
+tools/__pycache__/
+.venv/
+*.der
+*.pem
+*.prg
+*.fit
+*.debug.xml
+tools/deploy_state.json
+tools/phone_tokens.json
+!server/testdata_reference.fit

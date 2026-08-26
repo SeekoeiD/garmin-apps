@@ -1,0 +1,4 @@
+<properties>
+    <property id="deviceName" type="string"></property>
+    <property id="recordMode" type="number">0</property>
+</properties>
