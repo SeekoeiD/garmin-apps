@@ -11,8 +11,8 @@
 param(
     [switch]$Test,
     [switch]$Run,
-    [string]$Sdk = "C:\Users\User\Documents\edge-music-control\tools\connectiq-sdk",
-    [string]$Key = "C:\Users\User\Documents\edge-music-control\tools\developer_key.der",
+    [string]$Sdk = (Join-Path $PSScriptRoot "..\tools\connectiq-sdk"),
+    [string]$Key = (Join-Path $PSScriptRoot "..\tools\developer_key.der"),
     [string]$Device = "fr965"
 )
 

@@ -1,13 +1,39 @@
-# Edge Music Control
+# garmin-apps
 
-Control your phone's music from a Garmin Edge 830: play/pause, previous/next track, and volume up/down on a dedicated full-screen page, with track name, play state, and volume shown on the Edge. Works with any media app (YouTube Music, Spotify, podcasts, local files) whether audio plays through Bluetooth headphones or the phone speaker.
+Connect IQ apps for Daniel's Garmin devices, plus the Android companion that
+serves both:
 
-Connect IQ has no API for controlling phone media playback, so this is a two-part system:
+| Directory | What |
+|---|---|
+| `edge-app/` | **Edge Music Control** - music remote widget for a Garmin Edge 830 |
+| `treadmill-app/` | **Treadmill Link** - FR30Z treadmill runs on a Forerunner 965, with real speed/incline/elevation (see its README for the full story) |
+| `android-companion/` | One Android app hosting the Connect IQ phone link for both: media control for the Edge, FIT building + Garmin Connect upload for the watch |
+| `tools/` | Local toolchains (Connect IQ SDK, Gradle) and the signing key - untracked |
 
-- **`edge-app/`** — a Connect IQ device app (Monkey C) for the Edge 830. Launched from the IQ menu mid-ride; sends commands over the Connect IQ mobile channel (relayed by Garmin Connect Mobile).
-- **`android-companion/`** — an Android app (Kotlin) whose foreground service receives the commands and executes them against the phone's active media session — the same mechanism Bluetooth headphone buttons use — plus `AudioManager` for volume. It reports playback status back to the Edge.
+## Edge Music Control
 
-Android only; iOS cannot grant background apps control over other apps' playback.
+Control your phone's music from a Garmin Edge 830: play/pause, previous/next
+track, and volume up/down on a dedicated full-screen page, with track name,
+play state, and volume shown on the Edge. Works with any media app (YouTube
+Music, Spotify, podcasts, local files) whether audio plays through Bluetooth
+headphones or the phone speaker.
+
+Connect IQ has no API for controlling phone media playback, so it is a
+two-part system: the Edge widget sends commands over the Connect IQ mobile
+channel, and the companion's foreground service executes them against the
+phone's active media session - the same mechanism Bluetooth headphone buttons
+use - plus `AudioManager` for volume, reporting playback status back to the
+Edge. Android only; iOS cannot grant background apps control over other apps'
+playback.
+
+## Treadmill Link
+
+Records Reebok FR30Z treadmill runs on a Forerunner 965 with real speed,
+incline and elevation gain. The watch reads the treadmill over BLE FTMS,
+records compactly, and at save sends the run to the companion app, which
+builds the FIT and uploads it to Garmin Connect (which syncs it to Strava and
+back to the watch). Full details, including why simpler routes do not work,
+in [treadmill-app/README.md](treadmill-app/README.md).
 
 ## Building
 

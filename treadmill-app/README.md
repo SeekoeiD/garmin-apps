@@ -140,13 +140,13 @@ used for the recording.
 .\build.ps1 -Test -Run     # run the unit tests
 ```
 
-The SDK and developer key default to the paths used by the `edge-music-control`
-project; override with `-Sdk` and `-Key`.
+The SDK and developer key default to `../tools/` in this repository;
+override with `-Sdk` and `-Key`.
 
 Start the simulator first if using `-Run`:
 
 ```powershell
-& "C:\Users\User\Documents\edge-music-control\tools\connectiq-sdk\bin\connectiq.bat"
+& "..\tools\connectiq-sdk\bin\connectiq.bat"
 ```
 
 ## Install on the watch
@@ -160,7 +160,7 @@ app list.
 The watch no longer records a FIT at all. In the default cloud mode it records
 the run compactly (speed/incline change-points + one HR byte per second - a
 90-minute run is a few KB), and at save transmits it to the Android companion
-app (the edge-music-control APK) over Connect IQ phone messaging. The phone
+app (the android-companion APK in this repository) over Connect IQ phone messaging. The phone
 expands the run back to 1 Hz, builds the FIT natively in Kotlin - a port of
 server/fit_builder.py, verified byte-for-byte against
 server/testdata_reference.fit - and uploads it to Garmin Connect with OAuth
