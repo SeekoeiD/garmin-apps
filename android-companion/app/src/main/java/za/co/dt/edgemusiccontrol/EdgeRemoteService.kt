@@ -53,6 +53,8 @@ class EdgeRemoteService : Service() {
 
     private lateinit var garminLink: GarminLink
 
+    private lateinit var treadmillReceiver: TreadmillReceiver
+
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastStatusSentAt = 0L
@@ -79,9 +81,17 @@ class EdgeRemoteService : Service() {
             RemoteState.notifyChanged()
         }
 
+        treadmillReceiver = TreadmillReceiver(this)
+
         garminLink = GarminLink(this)
 
         garminLink.onCommand = { command -> handleCommand(command) }
+
+        // The same registration hosts the Forerunner's run uploads, so backgrounding the app does
+        // not cost a run any more than it costs a button press.
+        garminLink.onTreadmillMessage = { device, payload ->
+            treadmillReceiver.onMessage(payload) { reply -> garminLink.sendTreadmill(device, reply) }
+        }
 
         garminLink.onLinkChanged = {
             updateNotification()
@@ -93,6 +103,7 @@ class EdgeRemoteService : Service() {
         garminLink.start()
 
         RemoteState.serviceRunning = true
+        RemoteState.lastRunStatus = Prefs.lastRunStatus(this)
 
         RemoteState.notifyChanged()
     }
@@ -114,6 +125,7 @@ class EdgeRemoteService : Service() {
 
         mediaControl.stopWatching()
         garminLink.stop()
+        treadmillReceiver.shutdown()
 
         RemoteState.reset()
 
@@ -241,6 +253,17 @@ class EdgeRemoteService : Service() {
 
         channel.setShowBadge(false)
 
-        getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        // Upload results get their own channel: the ongoing one above is silent by design, and a
+        // finished run is something the user actually wants to be told about.
+        val uploads = NotificationChannel(
+            TreadmillReceiver.CHANNEL_ID,
+            getString(R.string.treadmill_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+
+        val manager = getSystemService(NotificationManager::class.java)
+
+        manager?.createNotificationChannel(channel)
+        manager?.createNotificationChannel(uploads)
     }
 }

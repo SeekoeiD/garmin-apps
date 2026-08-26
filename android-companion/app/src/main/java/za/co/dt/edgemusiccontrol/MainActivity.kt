@@ -12,7 +12,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.format.DateUtils
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 
 class MainActivity : Activity(), RemoteState.Listener {
@@ -28,6 +30,10 @@ class MainActivity : Activity(), RemoteState.Listener {
     private lateinit var batteryButton: Button
     private lateinit var serviceStatus: TextView
     private lateinit var serviceButton: Button
+    private lateinit var tokenField: EditText
+    private lateinit var tokenButton: Button
+    private lateinit var tokenStatus: TextView
+    private lateinit var treadmillStatus: TextView
     private lateinit var liveStatus: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,6 +47,10 @@ class MainActivity : Activity(), RemoteState.Listener {
         batteryButton = findViewById(R.id.batteryButton)
         serviceStatus = findViewById(R.id.serviceStatus)
         serviceButton = findViewById(R.id.serviceButton)
+        tokenField = findViewById(R.id.tokenField)
+        tokenButton = findViewById(R.id.tokenButton)
+        tokenStatus = findViewById(R.id.tokenStatus)
+        treadmillStatus = findViewById(R.id.treadmillStatus)
         liveStatus = findViewById(R.id.liveStatus)
 
         notificationButton.setOnClickListener {
@@ -50,6 +60,8 @@ class MainActivity : Activity(), RemoteState.Listener {
         batteryButton.setOnClickListener { requestBatteryExemption() }
 
         serviceButton.setOnClickListener { toggleService() }
+
+        tokenButton.setOnClickListener { saveTokens() }
 
         requestNotificationPermission()
     }
@@ -85,6 +97,26 @@ class MainActivity : Activity(), RemoteState.Listener {
 
         // The service flips RemoteState asynchronously; repaint shortly after either way.
         serviceButton.postDelayed({ render() }, 500L)
+    }
+
+    /**
+     * The pasted JSON is handed straight to Prefs and the field is cleared: the token text never
+     * makes it into a log, a saved instance state, or anywhere else it could leak.
+     */
+    private fun saveTokens() {
+        val raw = tokenField.text.toString()
+
+        if (raw.isBlank()) return
+
+        val saved = Prefs.saveGarminTokensJson(this, raw)
+
+        if (saved) {
+            tokenField.setText("")
+        } else {
+            Toast.makeText(this, R.string.tokens_rejected, Toast.LENGTH_LONG).show()
+        }
+
+        render()
     }
 
     private fun requestNotificationPermission() {
@@ -131,6 +163,18 @@ class MainActivity : Activity(), RemoteState.Listener {
         serviceButton.setText(
             if (RemoteState.serviceRunning) R.string.stop_service else R.string.start_service
         )
+
+        tokenStatus.setText(
+            if (Prefs.hasGarminTokens(this)) R.string.tokens_saved else R.string.tokens_missing
+        )
+
+        val lastRun = RemoteState.lastRunStatus ?: Prefs.lastRunStatus(this)
+
+        treadmillStatus.text = if (lastRun == null) {
+            getString(R.string.no_runs_yet)
+        } else {
+            "Last upload: $lastRun"
+        }
 
         liveStatus.text = buildStatusText()
     }

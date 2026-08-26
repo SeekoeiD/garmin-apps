@@ -42,6 +42,10 @@ object RemoteState {
     @Volatile
     var lastReport: String? = null
 
+    /** Outcome of the most recent treadmill run upload, mirrored from Prefs so it survives a restart. */
+    @Volatile
+    var lastRunStatus: String? = null
+
     private val listeners = CopyOnWriteArrayList<Listener>()
 
     private val mainHandler = Handler(Looper.getMainLooper())

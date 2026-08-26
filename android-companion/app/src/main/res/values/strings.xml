@@ -3,11 +3,12 @@
     <string name="app_name">Edge Music Control</string>
 
     <string name="heading">Edge Music Control</string>
-    <string name="subheading">Music remote for a Garmin Edge 830 over Connect IQ.</string>
+    <string name="subheading">Music remote for a Garmin Edge 830 and treadmill run uploads for a Forerunner 965, over Connect IQ.</string>
 
     <string name="step_notification_access">1. Notification access</string>
     <string name="step_battery">2. Battery optimisation</string>
-    <string name="step_service">3. Remote service</string>
+    <string name="step_service">3. Garmin link service (Edge + watch)</string>
+    <string name="step_treadmill">4. Treadmill run uploads</string>
 
     <string name="grant">Grant</string>
     <string name="exempt">Exempt</string>
@@ -22,6 +23,14 @@
     <string name="running">Running</string>
     <string name="stopped">Stopped</string>
 
+    <string name="save">Save</string>
+    <string name="token_hint">Paste Garmin token JSON</string>
+    <string name="tokens_saved">Garmin tokens: saved</string>
+    <string name="tokens_missing">Garmin tokens: missing</string>
+    <string name="tokens_rejected">That is not valid token JSON</string>
+    <string name="no_runs_yet">Last upload: none yet</string>
+
     <string name="notification_channel_name">Edge remote</string>
     <string name="notification_title">Edge music remote active</string>
+    <string name="treadmill_channel_name">Treadmill uploads</string>
 </resources>

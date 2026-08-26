@@ -35,4 +35,6 @@ android {
 dependencies {
     implementation("com.garmin.connectiq:ciq-companion-app-sdk:2.4.0")
     implementation("androidx.core:core-ktx:1.13.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- Treadmill runs from the Forerunner are rebuilt here and uploaded to Garmin Connect. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Garmin Connect Mobile owns the BLE link; we only bind to its service. -->
     <queries>
         <package android:name="com.garmin.android.apps.connectmobile" />
@@ -37,7 +41,7 @@
             android:foregroundServiceType="connectedDevice|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Relays music-control commands from a paired Garmin Edge bike computer to the phone's active media session for the duration of a ride." />
+                android:value="Relays music-control commands from a paired Garmin Edge bike computer to the phone's active media session for the duration of a ride, and receives recorded treadmill runs from a paired Garmin Forerunner watch." />
         </service>
 
         <service
