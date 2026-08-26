@@ -1,4 +1,9 @@
 <strings>
     <string id="AppName">Treadmill Link</string>
     <string id="SettingDeviceName">Treadmill BLE name (blank = auto)</string>
+    <string id="SettingServerUrl">Upload server URL</string>
+    <string id="SettingServerToken">Upload token</string>
+    <string id="SettingRecordMode">Recording mode</string>
+    <string id="RecordModeCloud">Stream to server</string>
+    <string id="RecordModeLegacy">Record on watch (legacy)</string>
 </strings>

@@ -10,7 +10,7 @@ using Toybox.Test;
 //! field description.
 (:test)
 function testSyntheticRecording(logger as Test.Logger) as Lang.Boolean {
-    var recorder = new Recorder();
+    var recorder = new Recorder(null, Recorder.MODE_LEGACY);
     var client = new FtmsClient(null);
 
     client.speedMps = 10.0 / 3.6;

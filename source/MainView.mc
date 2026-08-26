@@ -60,20 +60,22 @@ class MainView extends WatchUi.View {
         WatchUi.requestUpdate();
     }
 
-    //! Prefer the watch's own optical HR, since that is what the FIT file
-    //! records natively; fall back to a strap relayed by the treadmill.
+    //! The recorder owns the resolution order so the displayed HR and the
+    //! uploaded samples can never disagree.
     private function sampleHeartRate() as Void {
-        var info = Activity.getActivityInfo();
+        var hr = _recorder.resolveHr(_client);
+        _hr = (hr > 0) ? hr : null;
 
-        if (info != null && info.currentHeartRate != null) {
-            _hr = info.currentHeartRate;
-        } else if (_client.machineHr != null && _client.isFresh()) {
-            _hr = _client.machineHr;
-        } else {
-            _hr = null;
+        // Cloud mode has no session, so Activity has no average to give and
+        // the recorder's own running mean is the only source.
+        if (_recorder.isCloud()) {
+            _avgHr = _recorder.averageHr();
+
+            return;
         }
 
-        // Only populated once a session is recording.
+        var info = Activity.getActivityInfo();
+
         if (info != null && info.averageHeartRate != null) {
             _avgHr = info.averageHeartRate;
         }
@@ -145,6 +147,78 @@ class MainView extends WatchUi.View {
             ["AVG", "ELEV", "PACE"],
             [bpm(_avgHr), _recorder.ascentM.toNumber().toString() + " m", pace()],
             [Graphics.COLOR_RED, Graphics.COLOR_ORANGE, white]);
+
+        drawUploadLine(dc);
+    }
+
+    //! Upload feedback lives below the three tiers, in the last strip of the
+    //! circle that the measured layout never reaches. XTINY at height-60 still
+    //! clears the rim on a 454px round screen.
+    private function drawUploadLine(dc as Graphics.Dc) as Void {
+        var text = uploadStatus();
+
+        if (text == null) {
+            return;
+        }
+
+        var uploader = _recorder.uploader;
+        var color = Graphics.COLOR_LT_GRAY;
+
+        if (uploader != null && uploader.state == Uploader.STATE_DONE) {
+            color = Graphics.COLOR_GREEN;
+        } else if (uploader == null || uploader.state == Uploader.STATE_FAILED) {
+            color = Graphics.COLOR_YELLOW;
+        }
+
+        dc.setColor(color, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(dc.getWidth() / 2, dc.getHeight() - 60, Graphics.FONT_XTINY, text,
+            Graphics.TEXT_JUSTIFY_CENTER);
+    }
+
+    //! Null while the run is in progress: mid-run the upload is uninteresting
+    //! and the row above it is what the user is reading.
+    private function uploadStatus() as Lang.String or Null {
+        if (!_recorder.isCloud() || _recorder.isRecording()) {
+            return null;
+        }
+
+        var uploader = _recorder.uploader;
+
+        if (uploader == null) {
+            return null;
+        }
+
+        if (uploader.state == Uploader.STATE_DONE) {
+            return "UPLOADED " + km(uploader.finishDistanceM) + " +" + metres(uploader.finishAscentM);
+        }
+
+        if (uploader.state == Uploader.STATE_FAILED) {
+            return "UPLOAD FAILED - retry in menu";
+        }
+
+        if (uploader.state == Uploader.STATE_IDLE) {
+            return uploader.hasPending() ? "UPLOAD PENDING - retry in menu" : null;
+        }
+
+        var total = uploader.chunksSent + uploader.pendingChunks();
+
+        return "UP " + uploader.chunksSent.toString() + "/" + total.toString();
+    }
+
+    private function km(v as Lang.Float or Null) as Lang.String {
+        if (v == null) {
+            return "?";
+        }
+
+        return (v / 1000.0).format("%.2f") + "km";
+    }
+
+    private function metres(v as Lang.Float or Null) as Lang.String {
+        if (v == null) {
+            return "?";
+        }
+
+        return v.toNumber().toString() + "m";
     }
 
     private function speedText() as Lang.String {
@@ -278,10 +352,12 @@ class MainView extends WatchUi.View {
 
     private function drawDebug(dc as Graphics.Dc) as Void {
         var cx = dc.getWidth() / 2;
-        var y = 60;
+        var y = 46;
         var step = dc.getFontHeight(Graphics.FONT_XTINY) - 4;
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+
+        var uploader = _recorder.uploader;
 
         var lines = [
             _client.stateLabel() + " " + _client.statusDetail,
@@ -293,7 +369,14 @@ class MainView extends WatchUi.View {
             "native rejected: "
                 + (_recorder.nativeRejected.length() > 0 ? _recorder.nativeRejected : "none"),
             "alt " + _recorder.altitudeM.format("%.1f")
-                + "  asc " + _recorder.ascentM.format("%.1f")
+                + "  asc " + _recorder.ascentM.format("%.1f"),
+            "up " + (uploader == null ? "off" : uploader.stateLabel())
+                + "  sid " + (uploader == null ? "-" : fmt(uploader.sessionId)),
+            uploader == null ? "" :
+                "chk " + uploader.chunksSent.toString() + "/" + uploader.pendingChunks().toString()
+                    + "  buf " + uploader.samplesBuffered().toString()
+                    + "  http " + uploader.lastCode.toString()
+                    + (uploader.overflow ? " OVF" : "")
         ];
 
         for (var i = 0; i < lines.size(); i += 1) {
@@ -305,7 +388,7 @@ class MainView extends WatchUi.View {
         y += 10;
 
         var names = _client.seenNames;
-        var shown = names.size() > 4 ? 4 : names.size();
+        var shown = names.size() > 3 ? 3 : names.size();
 
         for (var i = 0; i < shown; i += 1) {
             dc.drawText(cx, y, Graphics.FONT_XTINY, names[i], Graphics.TEXT_JUSTIFY_CENTER);

@@ -1,3 +1,6 @@
 <properties>
     <property id="deviceName" type="string"></property>
+    <property id="serverUrl" type="string">https://treadmill.156.155.98.24.sslip.io</property>
+    <property id="serverToken" type="string">0709deaee949c66863e9352f296e1dbf</property>
+    <property id="recordMode" type="number">0</property>
 </properties>

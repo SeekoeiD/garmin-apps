@@ -53,14 +53,22 @@ class MainDelegate extends WatchUi.BehaviorDelegate {
     }
 
     function onBack() as Lang.Boolean {
-        if (!_recorder.hasSession()) {
+        var uploader = _recorder.uploader;
+        var pending = _recorder.isCloud() && uploader != null && uploader.hasPending();
+
+        // An upload still in flight must not be abandoned by a reflexive back
+        // press, so it opens the menu instead of exiting. Exiting from there
+        // is still safe: onStop parks the run in storage.
+        var busy = _recorder.isCloud() && uploader != null && !uploader.isSettled();
+
+        if (!_recorder.hasSession() && !pending && !busy) {
             _client.disconnect();
 
             return false;
         }
 
         WatchUi.pushView(
-            buildMenu(),
+            buildMenu(pending),
             new EndMenuDelegate(_client, _recorder),
             WatchUi.SLIDE_UP
         );
@@ -74,12 +82,22 @@ class MainDelegate extends WatchUi.BehaviorDelegate {
         return true;
     }
 
-    private function buildMenu() as WatchUi.Menu2 {
+    private function buildMenu(pending as Lang.Boolean) as WatchUi.Menu2 {
         var menu = new WatchUi.Menu2({:title => "Treadmill"});
 
-        menu.addItem(new WatchUi.MenuItem("Save", "finish and sync", :save, {}));
-        menu.addItem(new WatchUi.MenuItem("Resume", null, :resume, {}));
-        menu.addItem(new WatchUi.MenuItem("Discard", "delete this run", :discard, {}));
+        if (_recorder.hasSession()) {
+            menu.addItem(new WatchUi.MenuItem("Save", "finish and sync", :save, {}));
+            menu.addItem(new WatchUi.MenuItem("Resume", null, :resume, {}));
+            menu.addItem(new WatchUi.MenuItem("Discard", "delete this run", :discard, {}));
+        }
+
+        if (pending) {
+            menu.addItem(new WatchUi.MenuItem("Retry upload", "resend stored run", :retry, {}));
+        }
+
+        if (!_recorder.hasSession()) {
+            menu.addItem(new WatchUi.MenuItem("Exit", null, :exit, {}));
+        }
 
         return menu;
     }
@@ -109,9 +127,27 @@ class EndMenuDelegate extends WatchUi.Menu2InputDelegate {
             _recorder.save();
             _client.disconnect();
             WatchUi.popView(WatchUi.SLIDE_DOWN);
-            System.exit();
+
+            // In cloud mode the run is not safe until the finish callback
+            // lands, so the main view keeps showing upload progress and the
+            // user exits with back once it reads UPLOADED.
+            if (!_recorder.isCloud()) {
+                System.exit();
+            }
         } else if (id == :discard) {
             _recorder.discard();
+            _client.disconnect();
+            WatchUi.popView(WatchUi.SLIDE_DOWN);
+            System.exit();
+        } else if (id == :retry) {
+            var uploader = _recorder.uploader;
+
+            if (uploader != null) {
+                uploader.retry();
+            }
+
+            WatchUi.popView(WatchUi.SLIDE_DOWN);
+        } else if (id == :exit) {
             _client.disconnect();
             WatchUi.popView(WatchUi.SLIDE_DOWN);
             System.exit();

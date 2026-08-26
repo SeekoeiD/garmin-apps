@@ -3,18 +3,24 @@ using Toybox.ActivityRecording;
 using Toybox.FitContributor;
 using Toybox.Lang;
 using Toybox.Math;
+using Toybox.Sensor;
 
-//! Owns the FIT recording session and derives elevation from treadmill
-//! speed and incline.
+//! Derives distance and elevation from treadmill speed and incline, and hands
+//! the run to whichever sink the recordMode property selects.
 //!
-//! The interesting part is the :nativeNum option on Session.createField().
-//! It is the only mechanism Connect IQ offers for writing a value that a
-//! consumer should treat as a native FIT field rather than a plain developer
-//! field; a data field cannot do this at all, which is why this app owns the
-//! recording session instead of being a data field. Whether Garmin Connect
-//! and Strava honour the mapping for summary totals is the open question this
-//! app exists to answer - see NATIVE_* below to flip individual mappings off.
+//! MODE_CLOUD streams one sample per second to the Uploader and opens no
+//! ActivityRecording session at all. MODE_LEGACY is the original on-watch
+//! recording: a session whose developer fields carry :nativeNum mappings, the
+//! only mechanism Connect IQ offers for claiming a native FIT field. Real
+//! rides showed Garmin Connect and Strava ignore those mappings for summary
+//! totals, which is why the cloud path exists; the legacy path is kept so the
+//! two can still be compared.
 class Recorder {
+
+    enum {
+        MODE_CLOUD,
+        MODE_LEGACY
+    }
 
     // FIT native field numbers (FIT Profile, Rev 21.x).
     const REC_DISTANCE          = 5;   // record.distance, m
@@ -24,6 +30,13 @@ class Recorder {
     const LAP_TOTAL_ASCENT      = 21;  // lap.total_ascent, m
     const SES_TOTAL_ASCENT      = 22;  // session.total_ascent, m
     const SES_TOTAL_DESCENT     = 23;  // session.total_descent, m
+
+    var mode as Lang.Number = MODE_CLOUD;
+    var uploader as Uploader or Null = null;
+
+    // Latest reading from Sensor events. Only subscribed to in cloud mode,
+    // where no recording session implicitly powers the optical sensor.
+    var sensorHr as Lang.Number or Null = null;
 
     var recording as Lang.Boolean = false;
     var elapsedSec as Lang.Number = 0;
@@ -49,19 +62,54 @@ class Recorder {
     private var _fSesAscentPlain as FitContributor.Field or Null = null;
     private var _fLapAscent as FitContributor.Field or Null = null;
 
-    function initialize() {
+    // Cloud mode has no session object to stand in for "a run is open".
+    private var _active as Lang.Boolean = false;
+
+    // Running mean over recorded seconds with a usable reading, since without
+    // a session there is no Activity.averageHeartRate to read.
+    private var _hrSum as Lang.Number = 0;
+    private var _hrCount as Lang.Number = 0;
+
+    function initialize(sink as Uploader or Null, recordMode as Lang.Number) {
+        uploader = sink;
+        mode = recordMode;
     }
 
     function isRecording() as Lang.Boolean {
         return recording;
     }
 
+    function isCloud() as Lang.Boolean {
+        return mode == MODE_CLOUD;
+    }
+
+    //! True while a run is open - started and neither saved nor discarded.
     function hasSession() as Lang.Boolean {
+        if (mode == MODE_CLOUD) {
+            return _active;
+        }
+
         return _session != null;
     }
 
-    //! Create the session and its fields, then start the timer.
+    //! Create the sink, then start the timer.
     function start() as Void {
+        if (mode == MODE_CLOUD) {
+            if (!_active) {
+                _active = true;
+                seedAltitude();
+                enableHrSensor();
+
+                if (uploader != null) {
+                    uploader.start();
+                }
+            }
+
+            recording = true;
+
+            return;
+        }
+
         if (_session == null) {
             _session = ActivityRecording.createSession({
                 :name => "Treadmill",
@@ -86,6 +134,22 @@ class Recorder {
     }
 
     function save() as Void {
+        if (mode == MODE_CLOUD) {
+            if (!_active) {
+                return;
+            }
+
+            _active = false;
+            recording = false;
+            disableHrSensor();
+
+            if (uploader != null) {
+                uploader.finish();
+            }
+
+            return;
+        }
+
         if (_session == null) {
             return;
         }
@@ -98,6 +162,22 @@ class Recorder {
     }
 
     function discard() as Void {
+        if (mode == MODE_CLOUD) {
+            if (!_active) {
+                return;
+            }
+
+            _active = false;
+            recording = false;
+            disableHrSensor();
+
+            if (uploader != null) {
+                uploader.discard();
+            }
+
+            return;
+        }
+
         if (_session == null) {
             return;
         }
@@ -129,6 +209,12 @@ class Recorder {
     //! Distance is integrated along the belt, matching what the treadmill
     //! console shows.
     function update(client as FtmsClient, dt as Lang.Float) as Void {
+        // Retries have to keep running after the run is stopped, so the
+        // uploader is pumped ahead of the recording guard.
+        if (mode == MODE_CLOUD && uploader != null) {
+            uploader.tick();
+        }
+
         if (!recording) {
             return;
         }
@@ -161,6 +247,21 @@ class Recorder {
             descentM -= vertical * dt;
         }
 
+        var hr = resolveHr(client);
+
+        if (hr > 0) {
+            _hrSum += hr;
+            _hrCount += 1;
+        }
+
+        if (mode == MODE_CLOUD) {
+            if (uploader != null) {
+                uploader.addSample(v, incline, hr);
+            }
+
+            return;
+        }
+
         if (_fSpeed != null) { _fSpeed.setData(v); }
 
         if (_fDistance != null) { _fDistance.setData(distanceM); }
@@ -170,6 +271,63 @@ class Recorder {
         if (_fGrade != null) { _fGrade.setData(incline); }
 
         if (_fIncline != null) { _fIncline.setData(incline); }
+    }
+
+    //! Single resolution order for heart rate, shared by the display and the
+    //! uploaded samples: watch optical first, then the Sensor subscription
+    //! that stands in for it without a session, then a strap relayed by the
+    //! treadmill. 0 means no reading.
+    function resolveHr(client as FtmsClient) as Lang.Number {
+        var info = Activity.getActivityInfo();
+
+        if (info != null && info.currentHeartRate != null) {
+            return info.currentHeartRate;
+        }
+
+        if (sensorHr != null && sensorHr > 0) {
+            return sensorHr;
+        }
+
+        if (client.machineHr != null && client.isFresh()) {
+            return client.machineHr;
+        }
+
+        return 0;
+    }
+
+    //! Average over recorded seconds, or null before the first reading.
+    function averageHr() as Lang.Number or Null {
+        if (_hrCount == 0) {
+            return null;
+        }
+
+        return _hrSum / _hrCount;
+    }
+
+    //! Sensor callback. Public because method(:onSensor) cannot reach a
+    //! private symbol.
+    function onSensor(info as Sensor.Info) as Void {
+        if (info.heartRate != null) {
+            sensorHr = info.heartRate;
+        }
+    }
+
+    private function enableHrSensor() as Void {
+        try {
+            Sensor.setEnabledSensors([Sensor.SENSOR_HEARTRATE]);
+            Sensor.enableSensorEvents(method(:onSensor));
+        } catch (e) {
+            // No optical sensor, or the simulator declines: HR just stays
+            // on whatever the treadmill reports.
+        }
+    }
+
+    private function disableHrSensor() as Void {
+        try {
+            Sensor.setEnabledSensors([]);
+        } catch (e) {
+            // Nothing to unwind.
+        }
     }
 
     //! Session totals are written once at the end of the recording, but set

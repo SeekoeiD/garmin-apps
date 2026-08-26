@@ -9,3 +9,4 @@ tools/__pycache__/
 *.prg
 *.fit
 *.debug.xml
+tools/deploy_state.json
