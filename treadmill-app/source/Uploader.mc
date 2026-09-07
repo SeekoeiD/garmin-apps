@@ -59,7 +59,7 @@ class Uploader {
     const MSG_TYPE = "tl_run";
     const RESULT_TYPE = "tl_result";
 
-    const HR_CHUNK = 1000;      // HR values per Storage value (~5 KB each)
+    const HR_CHUNK = 500;       // HR values per Storage value (~2.5 KB each)
     // HR values per wire part. A 1500-value part (~7 KB) never reached the
     // phone on a real 44-minute run while the ~300-byte head part did, so
     // parts stay under about 1 KB.
@@ -198,9 +198,18 @@ class Uploader {
     }
 
     //! Drop the run entirely: nothing sent, no stored leftovers.
+    //! Drop the current run. Storage is only cleared when it holds this same
+    //! run, so discarding a fresh or empty run leaves an earlier pending run
+    //! intact for its retry.
     function discard() as Void {
+        var raw = Application.Storage.getValue(KEY_INDEX);
+        var stored = (raw instanceof Lang.Dictionary) ? (raw as Lang.Dictionary)["k"] : null;
+
+        if (stored instanceof Lang.Number && (stored as Lang.Number) == _k) {
+            clearStorage();
+        }
+
         reset();
-        clearStorage();
     }
 
     //! Called when the app is closing mid-run: park everything in storage so
@@ -590,11 +599,10 @@ class Uploader {
     //! Storage values have to stay small, so each HR chunk is its own key and
     //! the index carries only how many there are.
     private function persist() as Void {
-        // A run with nothing in it is not worth keeping, and storing it would
-        // leave the retry prompt up for nothing.
+        // A run with nothing in it is not worth keeping. It must not touch
+        // storage either: an empty run started by accident would otherwise
+        // wipe an earlier run still waiting for its retry.
         if (_dur == 0) {
-            clearStorage();
-
             return;
         }
 
