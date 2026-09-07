@@ -9,7 +9,7 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
     var up = new Uploader();
     up.start();
 
-    // 1501 seconds: 13 HR parts of 120, the last one holding 61 values.
+    // 1501 seconds: 26 sample parts of 60 seconds, the last one holding 1.
     for (var i = 0; i < 1501; i += 1) {
         var speed = (i < 600) ? 2.5 : 3.0;
         var incline = (i < 900) ? 1.0 : 2.5;
@@ -21,19 +21,20 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
     Test.assert(!up.overflow);
 
     var parts = up.buildParts();
-    Test.assertEqual(parts.size(), 14);
+    Test.assertEqual(parts.size(), 27);
 
     var head = parts[0] as Lang.Dictionary;
     var key = head["k"] as Lang.Number;
 
     Test.assert((head["t"] as Lang.String).equals("tl_run"));
     Test.assertEqual(head["i"] as Lang.Number, 0);
-    Test.assertEqual(head["n"] as Lang.Number, 14);
+    Test.assertEqual(head["n"] as Lang.Number, 27);
     Test.assertEqual(head["start"] as Lang.Number, key);
     Test.assertEqual(head["dur"] as Lang.Number, 1501);
     Test.assertEqual(up.runKey(), key);
 
-    // Change points only: two speeds and two inclines over 1501 seconds.
+    // The head keeps the speed change points, which the phone falls back to
+    // when a part carries no per-second "v": two speeds, two inclines.
     var sp = head["sp"] as Lang.Array;
     Test.assertEqual(sp.size(), 2);
     assertPair(sp[0] as Lang.Array, 0, 250);
@@ -46,26 +47,56 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
 
     var first = parts[1] as Lang.Dictionary;
     var firstHr = first["hr"] as Lang.Array;
+    var firstV = first["v"] as Lang.Array;
 
     Test.assertEqual(first["i"] as Lang.Number, 1);
-    Test.assertEqual(first["n"] as Lang.Number, 14);
+    Test.assertEqual(first["n"] as Lang.Number, 27);
     Test.assertEqual(first["k"] as Lang.Number, key);
-    Test.assertEqual(firstHr.size(), 120);
+    Test.assertEqual(firstHr.size(), 60);
     Test.assertEqual(firstHr[0] as Lang.Number, 120);
     Test.assertEqual(firstHr[1] as Lang.Number, 121);
+    Test.assertEqual(firstV.size(), 60);
+    Test.assertEqual(firstV[0] as Lang.Number, 250);
+    Test.assertEqual(firstV[59] as Lang.Number, 250);
 
-    var last = parts[13] as Lang.Dictionary;
-    var lastHr = last["hr"] as Lang.Array;
+    // Every sample part carries both series, equally long, so the phone can
+    // walk them second for second.
+    for (var i = 1; i < parts.size(); i += 1) {
+        var part = parts[i] as Lang.Dictionary;
+        var hr = part["hr"] as Lang.Array;
+        var v = part["v"] as Lang.Array;
 
-    Test.assertEqual(last["i"] as Lang.Number, 13);
-    Test.assertEqual(lastHr.size(), 61);
+        Test.assertEqual(part["i"] as Lang.Number, i);
+        Test.assert(v != null);
+        Test.assertEqual(v.size(), hr.size());
+    }
 
-    // Value 1440 (12 * 120) is the 1441st reading: 1440 % 3 == 0 -> 120.
-    Test.assertEqual(lastHr[0] as Lang.Number, 120);
+    // The speed step at second 600 falls on a part boundary: 600 / 60 == 10,
+    // so part 10 ends on 2.5 m/s and part 11 opens on 3.0.
+    Test.assertEqual(((parts[10] as Lang.Dictionary)["v"] as Lang.Array)[59] as Lang.Number, 250);
+    Test.assertEqual(((parts[11] as Lang.Dictionary)["v"] as Lang.Array)[0] as Lang.Number, 300);
 
     // Parts must be a re-slice of one continuous series, not per-chunk copies:
-    // the 1500th value (index 1499, 1499 % 3 == 2) lands in part 13 at offset 59.
-    Test.assertEqual(lastHr[59] as Lang.Number, 122);
+    // the 1500th value (index 1499, 1499 % 3 == 2) lands in part 25 at offset
+    // 59, well past the 500-value Storage chunking.
+    var tail = parts[25] as Lang.Dictionary;
+    var tailHr = tail["hr"] as Lang.Array;
+
+    Test.assertEqual(tailHr.size(), 60);
+    Test.assertEqual(tailHr[59] as Lang.Number, 122);
+    Test.assertEqual(((tail["v"] as Lang.Array)[59]) as Lang.Number, 300);
+
+    // 1501 seconds do not divide evenly: the last part holds the odd second.
+    var last = parts[26] as Lang.Dictionary;
+    var lastHr = last["hr"] as Lang.Array;
+
+    Test.assertEqual(last["i"] as Lang.Number, 26);
+    Test.assertEqual(lastHr.size(), 1);
+
+    // Index 1500, 1500 % 3 == 0 -> 120.
+    Test.assertEqual(lastHr[0] as Lang.Number, 120);
+    Test.assertEqual((last["v"] as Lang.Array).size(), 1);
+    Test.assertEqual(((last["v"] as Lang.Array)[0]) as Lang.Number, 300);
 
     up.discard();
 
@@ -124,7 +155,18 @@ function testPersistAndRetryRoundTrip(logger as Test.Logger) as Lang.Boolean {
     Test.assertEqual(head["dur"] as Lang.Number, 30);
     assertPair((head["sp"] as Lang.Array)[0] as Lang.Array, 0, 200);
     assertPair((head["inc"] as Lang.Array)[0] as Lang.Array, 0, 30);
-    Test.assertEqual(((parts[1] as Lang.Dictionary)["hr"] as Lang.Array).size(), 30);
+
+    // The per-second speed series has to survive the trip too, not just the
+    // change points, or a replayed run would draw a flat staircase.
+    var sample = parts[1] as Lang.Dictionary;
+    var hr = sample["hr"] as Lang.Array;
+    var v = sample["v"] as Lang.Array;
+
+    Test.assertEqual(hr.size(), 30);
+    Test.assert(v != null);
+    Test.assertEqual(v.size(), 30);
+    Test.assertEqual(v[0] as Lang.Number, 200);
+    Test.assertEqual(v[29] as Lang.Number, 200);
 
     replay.discard();
     Test.assert(!replay.hasPending());

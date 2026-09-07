@@ -97,6 +97,98 @@ class RunBufferTest {
         assertEquals(1480.0, readBack.altitude!!, 1e-9)
     }
 
+    /** What the treadmill actually did second by second beats interpolating between change-points. */
+    @Test
+    fun perSecondSpeedReplacesTheChangePoints() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 3, 4))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121))
+        buffer.saveSpeed(7L, 1, intArrayOf(200, 210))
+        buffer.saveHeartRate(7L, 2, intArrayOf(122, 123))
+        buffer.saveSpeed(7L, 2, intArrayOf(220, 230))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.0, 2.1, 2.2, 2.3), samples.map { it.speed })
+        assertEquals(listOf(120, 121, 122, 123), samples.map { it.hr })
+
+        // Incline has no series of its own, so it still comes from part 0.
+        assertEquals(listOf(4.0, 4.0, 4.0, 4.0), samples.map { it.incline })
+    }
+
+    /** The old wire format, and every run already sitting on disk when the app is updated. */
+    @Test
+    fun heartRateOnlyPartsFallBackToTheChangePoints() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 2, 4))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121, 122, 123))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.5, 2.5, 2.5, 2.5), samples.map { it.speed })
+        assertEquals(listOf(120, 121, 122, 123), samples.map { it.hr })
+    }
+
+    /** Half a series is worse than none: one part without speeds throws the whole run out of step. */
+    @Test
+    fun oneSpeedlessPartFallsBackToTheChangePoints() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 3, 4))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121))
+        buffer.saveSpeed(7L, 1, intArrayOf(200, 210))
+        buffer.saveHeartRate(7L, 2, intArrayOf(122, 123))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.5, 2.5, 2.5, 2.5), samples.map { it.speed })
+    }
+
+    @Test
+    fun aSpeedSeriesThatStopsShortFallsBackToTheChangePoints() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 2, 4))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121, 122, 123))
+        buffer.saveSpeed(7L, 1, intArrayOf(200, 210, 220))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.5, 2.5, 2.5, 2.5), samples.map { it.speed })
+    }
+
+    @Test
+    fun aSpeedSeriesLongerThanTheRunIsTruncated() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 2, 3))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121, 122, 123))
+        buffer.saveSpeed(7L, 1, intArrayOf(200, 210, 220, 230))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.0, 2.1, 2.2), samples.map { it.speed })
+    }
+
+    /** The watch retries a part it is unsure of, speeds and all. */
+    @Test
+    fun aResentPartOverwritesItsSpeeds() {
+        val buffer = buffer()
+
+        buffer.saveMeta(meta(7L, 2, 2))
+        buffer.saveHeartRate(7L, 1, intArrayOf(0, 0))
+        buffer.saveSpeed(7L, 1, intArrayOf(0, 0))
+        buffer.saveHeartRate(7L, 1, intArrayOf(120, 121))
+        buffer.saveSpeed(7L, 1, intArrayOf(200, 210))
+
+        val (_, samples) = buffer.assemble(7L)!!
+
+        assertEquals(listOf(2.0, 2.1), samples.map { it.speed })
+        assertEquals(listOf(120, 121), samples.map { it.hr })
+    }
+
     @Test
     fun assemblesNothingWhileAPartIsStillMissing() {
         val buffer = buffer()

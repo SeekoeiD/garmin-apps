@@ -158,8 +158,8 @@ app list.
 ## v3: phone-upload pipeline (current)
 
 The watch no longer records a FIT at all. In the default cloud mode it records
-the run compactly (speed/incline change-points + one HR byte per second - a
-90-minute run is a few KB), and at save transmits it to the Android companion
+the run compactly (incline change-points + one HR byte and one speed value per
+second - a 90-minute run is a few KB), and at save transmits it to the Android companion
 app (the android-companion APK in this repository) over Connect IQ phone messaging. The phone
 expands the run back to 1 Hz, builds the FIT natively in Kotlin - a port of
 server/fit_builder.py, verified byte-for-byte against
@@ -167,10 +167,16 @@ server/testdata_reference.fit - and uploads it to Garmin Connect with OAuth
 tokens pasted into the app once. Garmin syncs the activity onward to Strava
 and back to the watch's own history.
 
-Wire protocol: "tl_run" parts (part 0 = header + change lists, later parts =
-120 HR values each - a 1500-value part never reached the phone on a real
-44-minute run, while the ~300-byte header did), replied to with "tl_result". Runs are keyed by their
+Wire protocol: "tl_run" parts (part 0 = header + change lists, later parts = 60
+seconds each, carrying an "hr" array and an equally long "v" array of speeds in
+cm/s - a 1500-value part never reached the phone on a real 44-minute run, while
+the ~300-byte header did), replied to with "tl_result". Runs are keyed by their
 start epoch; the phone dedupes on it, so watch-side retries are always safe.
+
+Speed goes on the wire twice. The per-second "v" arrays are what the chart
+draws; the header's "sp" change-points are the fallback the phone uses when a
+part has no "v", which is how a run parked in storage by an older build still
+uploads - as the flat staircase that motivated adding "v" in the first place.
 An unreachable phone at save time parks the run in watch storage for the
 menu's "Retry upload".
 

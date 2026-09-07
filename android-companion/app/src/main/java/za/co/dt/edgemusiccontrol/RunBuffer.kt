@@ -5,7 +5,8 @@ import java.io.File
 /**
  * Holds the parts of a treadmill run on disk until every part has arrived.
  *
- * The watch sends a run as one metadata part plus N heart-rate parts, retrying any part it is not
+ * The watch sends a run as one metadata part plus N sample parts, each carrying per-second heart
+ * rates and (since the watch started sending them) per-second speeds, retrying any part it is not
  * sure landed. Buffering in memory would lose a half-transferred run whenever Android reclaims the
  * process, which for a 45-minute run is a real risk, so each part hits the filesystem as it lands.
  *
@@ -18,7 +19,8 @@ class RunBuffer(private val root: File) {
 
         private const val META_FILE = "meta.txt"
         private const val HR_PREFIX = "hr"
-        private const val HR_SUFFIX = ".txt"
+        private const val SPEED_PREFIX = "v"
+        private const val PART_SUFFIX = ".txt"
 
         fun encodeMeta(meta: Meta): String {
             val builder = StringBuilder()
@@ -83,7 +85,7 @@ class RunBuffer(private val root: File) {
         }
     }
 
-    /** Part 0 of a run: everything except the heart rate stream. */
+    /** Part 0 of a run: everything except the per-second streams. */
     data class Meta(
         val key: Long,
         val parts: Int,
@@ -99,7 +101,12 @@ class RunBuffer(private val root: File) {
     }
 
     fun saveHeartRate(key: Long, index: Int, values: IntArray) {
-        write(File(directory(key), HR_PREFIX + index + HR_SUFFIX), values.joinToString(","))
+        write(File(directory(key), HR_PREFIX + index + PART_SUFFIX), values.joinToString(","))
+    }
+
+    /** The part's per-second speeds as v100, stored alongside its heart rates. */
+    fun saveSpeed(key: Long, index: Int, values: IntArray) {
+        write(File(directory(key), SPEED_PREFIX + index + PART_SUFFIX), values.joinToString(","))
     }
 
     fun meta(key: Long): Meta? {
@@ -111,15 +118,12 @@ class RunBuffer(private val root: File) {
     }
 
     fun heartRate(key: Long, index: Int): IntArray? {
-        val file = File(directory(key), HR_PREFIX + index + HR_SUFFIX)
+        return values(File(directory(key), HR_PREFIX + index + PART_SUFFIX))
+    }
 
-        if (!file.isFile) return null
-
-        val text = runCatching { file.readText() }.getOrNull() ?: return null
-
-        if (text.isBlank()) return IntArray(0)
-
-        return text.split(',').map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
+    /** Null when the part never carried speeds, which is every part of an older run. */
+    fun speed(key: Long, index: Int): IntArray? {
+        return values(File(directory(key), SPEED_PREFIX + index + PART_SUFFIX))
     }
 
     /** True once part 0 and every heart-rate part it promised are on disk. */
@@ -138,16 +142,35 @@ class RunBuffer(private val root: File) {
      *
      * Parts are concatenated in index order rather than placed at a fixed stride, so a watch that
      * changes its part size mid-run still lines up.
+     *
+     * Speed comes from the per-second series the parts carry, which records what the treadmill was
+     * actually doing between change-points. A run whose parts carry no speeds, or whose speeds stop
+     * short of the duration, falls back to expanding part 0's change-points — that is how every run
+     * worked before the watch started sending the series, and how a half-old buffered run still
+     * assembles. Incline always comes from the change-points; the watch sends no series for it.
      */
     fun assemble(key: Long): Pair<Meta, List<RunBuilder.Sample>>? {
         val meta = meta(key) ?: return null
         val beats = ArrayList<Int>(meta.duration)
+        val speeds = ArrayList<Int>(meta.duration)
+
+        var speedSeries = true
 
         for (index in 1 until meta.parts) {
             val part = heartRate(key, index) ?: return null
 
             for (beat in part) {
                 beats.add(beat)
+            }
+
+            val speedPart = speed(key, index)
+
+            if (speedPart == null) {
+                speedSeries = false
+            } else {
+                for (value in speedPart) {
+                    speeds.add(value)
+                }
             }
         }
 
@@ -158,7 +181,14 @@ class RunBuffer(private val root: File) {
             beats.toIntArray()
         )
 
-        return Pair(meta, samples)
+        if (!speedSeries || speeds.size < meta.duration) return Pair(meta, samples)
+
+        // Longer than the run means the last part overshot the duration; the tail is not a sample.
+        val measured = samples.mapIndexed { second, sample ->
+            sample.copy(speed = speeds[second] / 100.0)
+        }
+
+        return Pair(meta, measured)
     }
 
     fun discard(key: Long) {
@@ -167,6 +197,17 @@ class RunBuffer(private val root: File) {
         directory.listFiles()?.forEach { runCatching { it.delete() } }
 
         runCatching { directory.delete() }
+    }
+
+    /** One part's stored series, or null if that file was never written. */
+    private fun values(file: File): IntArray? {
+        if (!file.isFile) return null
+
+        val text = runCatching { file.readText() }.getOrNull() ?: return null
+
+        if (text.isBlank()) return IntArray(0)
+
+        return text.split(',').map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
     }
 
     private fun directory(key: Long): File {

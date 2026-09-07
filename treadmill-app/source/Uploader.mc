@@ -41,9 +41,12 @@ class PartListener extends Communications.ConnectionListener {
 //! developer fields with :nativeNum, which Garmin Connect and Strava ignore, so
 //! the watch ships the run and the phone owns the FIT.
 //!
-//! Recording is change-point encoded - speed and incline are stored only when
-//! they change, heart rate once per second - so a 90 minute run is a few KB and
-//! survives being parked in Application.Storage when the phone is out of reach.
+//! Recording is part change-point encoded - incline is stored only when it
+//! changes - and part per-second: heart rate and speed both get one small
+//! Number every second, so a 90 minute run is a few KB and survives being
+//! parked in Application.Storage when the phone is out of reach. Speed is also
+//! kept as change-points, which the phone falls back to when a run predates the
+//! per-second series.
 class Uploader {
 
     enum {
@@ -59,11 +62,12 @@ class Uploader {
     const MSG_TYPE = "tl_run";
     const RESULT_TYPE = "tl_result";
 
-    const HR_CHUNK = 500;       // HR values per Storage value (~2.5 KB each)
-    // HR values per wire part. A 1500-value part (~7 KB) never reached the
-    // phone on a real 44-minute run while the ~300-byte head part did, so
-    // parts stay under about 1 KB.
-    const HR_PART = 120;
+    const HR_CHUNK = 500;       // values per Storage value, per series (~2.5 KB)
+    // Seconds per wire part. A 1500-value part (~7 KB) never reached the phone
+    // on a real 44-minute run while the ~300-byte head part did, so parts stay
+    // under about 1 KB. Each part now carries two values per second - heart
+    // rate and speed - so the second count is half what the HR-only build used.
+    const PART = 60;
     const MAX_DUR = 14400;      // 4 h at 1 Hz, after which sampling stops
     const MAX_BACKOFF = 60;     // seconds between retries, at the ceiling
     const MAX_ATTEMPTS = 8;     // consecutive transmit failures = give up
@@ -106,11 +110,13 @@ class Uploader {
     private var _alt as Lang.Float or Null = null;
     private var _dur as Lang.Number = 0;
 
-    // Change points as [sec, value] pairs, and one HR reading per second held
-    // in chunks of at most HR_CHUNK so no single Storage value gets large.
+    // Change points as [sec, value] pairs, and one HR and one speed reading per
+    // second held in chunks of at most HR_CHUNK so no single Storage value gets
+    // large. The two per-second series always advance together.
     private var _sp as Lang.Array = [];
     private var _inc as Lang.Array = [];
     private var _hrChunks as Lang.Array = [];
+    private var _vChunks as Lang.Array = [];
 
     private var _parts as Lang.Array = [];
     private var _txActive as Lang.Boolean = false;
@@ -139,8 +145,8 @@ class Uploader {
         state = STATE_STARTING;
     }
 
-    //! Record one second of run data. Speed and incline only cost anything when
-    //! they change; heart rate is one small Number per second.
+    //! Record one second of run data. Incline only costs anything when it
+    //! changes; heart rate and speed are one small Number each per second.
     function addSample(speedMps as Lang.Float, inclinePct as Lang.Float, hr as Lang.Number) as Void {
         if (state != STATE_STARTING && state != STATE_STREAMING) {
             return;
@@ -155,10 +161,12 @@ class Uploader {
         }
 
         var sec = _dur;
+        var v100 = scaled(speedMps, 100.0);
 
-        appendChange(_sp, sec, scaled(speedMps, 100.0));
+        appendChange(_sp, sec, v100);
         appendChange(_inc, sec, scaled(inclinePct, 10.0));
-        appendHr(hr);
+        appendSample(_hrChunks, clamped(hr, 0, 255));
+        appendSample(_vChunks, clamped(v100, 0, 65535));
 
         _dur += 1;
     }
@@ -280,12 +288,31 @@ class Uploader {
             _alt = alt as Lang.Float;
         }
 
+        // Both series were written chunk-for-chunk, so one count covers both.
+        // A missing or short speed chunk - a run parked by an older build, or a
+        // storage write that only half succeeded - drops the speed series
+        // entirely rather than shipping one that does not line up with the HR
+        // seconds; the phone then falls back to the "sp" change points.
+        var speedOk = true;
+
         for (var j = 0; j < chunks; j += 1) {
             var hr = Application.Storage.getValue(hrKey(key, j));
 
             if (hr instanceof Lang.Array) {
                 _hrChunks.add(hr);
             }
+
+            var v = Application.Storage.getValue(vKey(key, j));
+
+            if (v instanceof Lang.Array) {
+                _vChunks.add(v);
+            } else {
+                speedOk = false;
+            }
+        }
+
+        if (!speedOk || seriesSize(_vChunks) != seriesSize(_hrChunks)) {
+            _vChunks = [];
         }
 
         return true;
@@ -328,12 +355,17 @@ class Uploader {
     }
 
     //! The run as it goes on the wire: a head part carrying the change lists,
-    //! then HR parts of at most HR_PART values each, re-sliced from however the
-    //! Storage chunks happen to be sized so a replay of an older, larger chunk
-    //! still goes out in small messages. Public so the tests can inspect the
-    //! exact payload the phone is built against.
+    //! then sample parts of at most PART seconds each, re-sliced from however
+    //! the Storage chunks happen to be sized so a replay of an older, larger
+    //! chunk still goes out in small messages. Each sample part carries "hr"
+    //! and, whenever the per-second speed series is intact, an equally long
+    //! "v". Public so the tests can inspect the exact payload the phone is
+    //! built against.
     function buildParts() as Lang.Array {
-        var hrParts = sliceHr();
+        var hrParts = sliceSeries(_hrChunks);
+        var vParts = (seriesSize(_vChunks) == seriesSize(_hrChunks))
+            ? sliceSeries(_vChunks)
+            : ([] as Lang.Array);
         var n = 1 + hrParts.size();
         var parts = [] as Lang.Array;
 
@@ -354,30 +386,42 @@ class Uploader {
         parts.add(head);
 
         for (var j = 0; j < hrParts.size(); j += 1) {
+            var hr = hrParts[j] as Lang.Array;
             var part = {} as Lang.Dictionary;
             part["t"] = MSG_TYPE;
             part["k"] = _k;
             part["i"] = j + 1;
             part["n"] = n;
-            part["hr"] = hrParts[j];
+            part["hr"] = hr;
+
+            if (j < vParts.size()) {
+                var v = vParts[j] as Lang.Array;
+
+                if (v.size() == hr.size()) {
+                    part["v"] = v;
+                }
+            }
+
             parts.add(part);
         }
 
         return parts;
     }
 
-    //! Every recorded HR value, in order, cut into arrays of at most HR_PART.
-    private function sliceHr() as Lang.Array {
+    //! Every recorded value of one series, in order, cut into arrays of at most
+    //! PART. Both series are cut the same way, so part i of one lines up second
+    //! for second with part i of the other.
+    private function sliceSeries(chunks as Lang.Array) as Lang.Array {
         var out = [] as Lang.Array;
         var current = [] as Lang.Array;
 
-        for (var j = 0; j < _hrChunks.size(); j += 1) {
-            var chunk = _hrChunks[j] as Lang.Array;
+        for (var j = 0; j < chunks.size(); j += 1) {
+            var chunk = chunks[j] as Lang.Array;
 
             for (var i = 0; i < chunk.size(); i += 1) {
                 current.add(chunk[i]);
 
-                if (current.size() >= HR_PART) {
+                if (current.size() >= PART) {
                     out.add(current);
                     current = [] as Lang.Array;
                 }
@@ -389,6 +433,17 @@ class Uploader {
         }
 
         return out;
+    }
+
+    //! Total values held across a series' chunks.
+    private function seriesSize(chunks as Lang.Array) as Lang.Number {
+        var total = 0;
+
+        for (var j = 0; j < chunks.size(); j += 1) {
+            total += (chunks[j] as Lang.Array).size();
+        }
+
+        return total;
     }
 
     //! The phone's verdict on a run. Everything here is untrusted input: any
@@ -570,34 +625,38 @@ class Uploader {
     }
 
     //! One reading per second, 0 for unknown, kept in bounded chunks that map
-    //! straight onto the wire parts and onto individual Storage values.
-    private function appendHr(hr as Lang.Number) as Void {
-        var v = hr;
-
-        if (v < 0) {
-            v = 0;
-        }
-
-        if (v > 255) {
-            v = 255;
-        }
-
+    //! straight onto individual Storage values. Every per-second series is
+    //! chunked identically, so one chunk count in the index covers them all.
+    private function appendSample(chunks as Lang.Array, value as Lang.Number) as Void {
         var chunk = null;
 
-        if (_hrChunks.size() > 0) {
-            chunk = _hrChunks[_hrChunks.size() - 1] as Lang.Array;
+        if (chunks.size() > 0) {
+            chunk = chunks[chunks.size() - 1] as Lang.Array;
         }
 
         if (chunk == null || chunk.size() >= HR_CHUNK) {
             chunk = [] as Lang.Array;
-            _hrChunks.add(chunk);
+            chunks.add(chunk);
         }
 
-        chunk.add(v);
+        chunk.add(value);
     }
 
-    //! Storage values have to stay small, so each HR chunk is its own key and
-    //! the index carries only how many there are.
+    private function clamped(v as Lang.Number, low as Lang.Number, high as Lang.Number) as Lang.Number {
+        if (v < low) {
+            return low;
+        }
+
+        if (v > high) {
+            return high;
+        }
+
+        return v;
+    }
+
+    //! Storage values have to stay small, so each chunk of each per-second
+    //! series is its own key and the index carries only how many there are.
+    //! One count is enough: the series are chunked in lockstep.
     private function persist() as Void {
         // A run with nothing in it is not worth keeping. It must not touch
         // storage either: an empty run started by accident would otherwise
@@ -609,6 +668,10 @@ class Uploader {
         try {
             for (var j = 0; j < _hrChunks.size(); j += 1) {
                 Application.Storage.setValue(hrKey(_k, j), _hrChunks[j]);
+            }
+
+            for (var j = 0; j < _vChunks.size(); j += 1) {
+                Application.Storage.setValue(vKey(_k, j), _vChunks[j]);
             }
 
             var index = {} as Lang.Dictionary;
@@ -644,6 +707,7 @@ class Uploader {
 
                 for (var j = 0; j < chunks; j += 1) {
                     Application.Storage.deleteValue(hrKey(key, j));
+                    Application.Storage.deleteValue(vKey(key, j));
                 }
             }
 
@@ -686,6 +750,7 @@ class Uploader {
         _sp = [];
         _inc = [];
         _hrChunks = [];
+        _vChunks = [];
         _parts = [];
         _backoff = 1;
         _attempts = 0;
@@ -693,6 +758,10 @@ class Uploader {
 
     private function hrKey(k as Lang.Number, j as Lang.Number) as Lang.String {
         return "pend_hr_" + k.toString() + "_" + j.toString();
+    }
+
+    private function vKey(k as Lang.Number, j as Lang.Number) as Lang.String {
+        return "pend_v_" + k.toString() + "_" + j.toString();
     }
 
     private function floatFrom(v as Lang.Object or Null) as Lang.Float or Null {

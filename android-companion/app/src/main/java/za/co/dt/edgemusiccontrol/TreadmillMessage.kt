@@ -75,6 +75,19 @@ object TreadmillMessage {
         return IntArray(items.size) { integer(items[it]) ?: 0 }
     }
 
+    /**
+     * Consecutive per-second speeds as v100 (m/s x 100), aligned with the part's heart rates.
+     *
+     * Null means the part carries no speed series at all — the watch sent none before this format,
+     * and a run without one falls back to part 0's change-points. An unreadable entry inside a real
+     * series becomes 0, meaning standing still.
+     */
+    fun speed(value: Any?): IntArray? {
+        val items = list(value) ?: return null
+
+        return IntArray(items.size) { integer(items[it]) ?: 0 }
+    }
+
     /** Part 0 of a run, or null if it is missing anything the builder cannot do without. */
     fun meta(key: Long, parts: Int, message: Map<*, *>): RunBuffer.Meta? {
         val duration = integer(message["dur"]) ?: return null

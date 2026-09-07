@@ -101,6 +101,23 @@ class TreadmillMessageTest {
     }
 
     @Test
+    fun readsPerSecondSpeedTheSameWayAsHeartRate() {
+        val raw = arrayListOf<Any?>(250, 255.0, null, 0, "300")
+
+        assertTrue(intArrayOf(250, 255, 0, 0, 300).contentEquals(TreadmillMessage.speed(raw)!!))
+    }
+
+    /** A part from an older watch build carries no "v" at all, which is not an error. */
+    @Test
+    fun treatsAMissingSpeedSeriesAsAbsent() {
+        val part = hashMapOf<String, Any>("hr" to arrayListOf(120, 121))
+
+        assertNull(TreadmillMessage.speed(part["v"]))
+        assertNull(TreadmillMessage.speed("not a list"))
+        assertEquals(0, TreadmillMessage.speed(arrayListOf<Any?>())!!.size)
+    }
+
+    @Test
     fun findsTheRunMapNestedInsideThePayload() {
         val message = part0()
         val payload = listOf<Any>(arrayListOf(hashMapOf("wrapper" to arrayListOf(message))))

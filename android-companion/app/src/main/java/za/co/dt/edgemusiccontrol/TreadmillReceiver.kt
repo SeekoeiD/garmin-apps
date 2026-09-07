@@ -114,6 +114,11 @@ class TreadmillReceiver(private val context: Context) {
             buffer.saveMeta(meta)
         } else {
             buffer.saveHeartRate(key, index, TreadmillMessage.heartRate(message["hr"]))
+
+            // Older watch builds send heart rate only; that run's speed comes from the change-points.
+            val speed = TreadmillMessage.speed(message["v"])
+
+            if (speed != null) buffer.saveSpeed(key, index, speed)
         }
 
         if (!buffer.isComplete(key)) {
