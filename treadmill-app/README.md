@@ -180,6 +180,12 @@ uploads - as the flat staircase that motivated adding "v" in the first place.
 An unreachable phone at save time parks the run in watch storage for the
 menu's "Retry upload".
 
+Activities are typed **Virtual Run** (sport running, sub_sport
+virtual_activity), not Treadmill Running: Strava strips the elevation total
+from anything tagged treadmill by policy, but counts it for virtual
+activities - the same reason Zwift rides keep their climbing. Garmin syncs a
+Virtual Run to Strava normally and it still appears on the watch.
+
 Legacy on-watch recording (v1, nativeNum developer fields) remains selectable
 via the recordMode setting.
 
