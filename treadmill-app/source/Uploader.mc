@@ -59,7 +59,11 @@ class Uploader {
     const MSG_TYPE = "tl_run";
     const RESULT_TYPE = "tl_result";
 
-    const HR_CHUNK = 1500;      // HR values per part, and per Storage value
+    const HR_CHUNK = 1000;      // HR values per Storage value (~5 KB each)
+    // HR values per wire part. A 1500-value part (~7 KB) never reached the
+    // phone on a real 44-minute run while the ~300-byte head part did, so
+    // parts stay under about 1 KB.
+    const HR_PART = 120;
     const MAX_DUR = 14400;      // 4 h at 1 Hz, after which sampling stops
     const MAX_BACKOFF = 60;     // seconds between retries, at the ceiling
     const MAX_ATTEMPTS = 8;     // consecutive transmit failures = give up
@@ -315,10 +319,13 @@ class Uploader {
     }
 
     //! The run as it goes on the wire: a head part carrying the change lists,
-    //! then one part per HR chunk. Public so the tests can inspect the exact
-    //! payload the phone is built against.
+    //! then HR parts of at most HR_PART values each, re-sliced from however the
+    //! Storage chunks happen to be sized so a replay of an older, larger chunk
+    //! still goes out in small messages. Public so the tests can inspect the
+    //! exact payload the phone is built against.
     function buildParts() as Lang.Array {
-        var n = 1 + _hrChunks.size();
+        var hrParts = sliceHr();
+        var n = 1 + hrParts.size();
         var parts = [] as Lang.Array;
 
         var head = {} as Lang.Dictionary;
@@ -337,17 +344,42 @@ class Uploader {
         head["inc"] = _inc;
         parts.add(head);
 
-        for (var j = 0; j < _hrChunks.size(); j += 1) {
+        for (var j = 0; j < hrParts.size(); j += 1) {
             var part = {} as Lang.Dictionary;
             part["t"] = MSG_TYPE;
             part["k"] = _k;
             part["i"] = j + 1;
             part["n"] = n;
-            part["hr"] = _hrChunks[j];
+            part["hr"] = hrParts[j];
             parts.add(part);
         }
 
         return parts;
+    }
+
+    //! Every recorded HR value, in order, cut into arrays of at most HR_PART.
+    private function sliceHr() as Lang.Array {
+        var out = [] as Lang.Array;
+        var current = [] as Lang.Array;
+
+        for (var j = 0; j < _hrChunks.size(); j += 1) {
+            var chunk = _hrChunks[j] as Lang.Array;
+
+            for (var i = 0; i < chunk.size(); i += 1) {
+                current.add(chunk[i]);
+
+                if (current.size() >= HR_PART) {
+                    out.add(current);
+                    current = [] as Lang.Array;
+                }
+            }
+        }
+
+        if (current.size() > 0) {
+            out.add(current);
+        }
+
+        return out;
     }
 
     //! The phone's verdict on a run. Everything here is untrusted input: any

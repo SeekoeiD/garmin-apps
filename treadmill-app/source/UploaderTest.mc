@@ -9,7 +9,7 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
     var up = new Uploader();
     up.start();
 
-    // 1501 seconds, so the heart rate series spans two parts: 1500 then 1.
+    // 1501 seconds: 13 HR parts of 120, the last one holding 61 values.
     for (var i = 0; i < 1501; i += 1) {
         var speed = (i < 600) ? 2.5 : 3.0;
         var incline = (i < 900) ? 1.0 : 2.5;
@@ -21,14 +21,14 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
     Test.assert(!up.overflow);
 
     var parts = up.buildParts();
-    Test.assertEqual(parts.size(), 3);
+    Test.assertEqual(parts.size(), 14);
 
     var head = parts[0] as Lang.Dictionary;
     var key = head["k"] as Lang.Number;
 
     Test.assert((head["t"] as Lang.String).equals("tl_run"));
     Test.assertEqual(head["i"] as Lang.Number, 0);
-    Test.assertEqual(head["n"] as Lang.Number, 3);
+    Test.assertEqual(head["n"] as Lang.Number, 14);
     Test.assertEqual(head["start"] as Lang.Number, key);
     Test.assertEqual(head["dur"] as Lang.Number, 1501);
     Test.assertEqual(up.runKey(), key);
@@ -48,20 +48,24 @@ function testWireFormat(logger as Test.Logger) as Lang.Boolean {
     var firstHr = first["hr"] as Lang.Array;
 
     Test.assertEqual(first["i"] as Lang.Number, 1);
-    Test.assertEqual(first["n"] as Lang.Number, 3);
+    Test.assertEqual(first["n"] as Lang.Number, 14);
     Test.assertEqual(first["k"] as Lang.Number, key);
-    Test.assertEqual(firstHr.size(), 1500);
+    Test.assertEqual(firstHr.size(), 120);
     Test.assertEqual(firstHr[0] as Lang.Number, 120);
     Test.assertEqual(firstHr[1] as Lang.Number, 121);
 
-    var second = parts[2] as Lang.Dictionary;
-    var secondHr = second["hr"] as Lang.Array;
+    var last = parts[13] as Lang.Dictionary;
+    var lastHr = last["hr"] as Lang.Array;
 
-    Test.assertEqual(second["i"] as Lang.Number, 2);
-    Test.assertEqual(secondHr.size(), 1);
+    Test.assertEqual(last["i"] as Lang.Number, 13);
+    Test.assertEqual(lastHr.size(), 61);
 
-    // Second 1500 is the 1501st reading, so it continues the 120/121/122 cycle.
-    Test.assertEqual(secondHr[0] as Lang.Number, 120);
+    // Value 1440 (12 * 120) is the 1441st reading: 1440 % 3 == 0 -> 120.
+    Test.assertEqual(lastHr[0] as Lang.Number, 120);
+
+    // Parts must be a re-slice of one continuous series, not per-chunk copies:
+    // the 1500th value (index 1499, 1499 % 3 == 2) lands in part 13 at offset 59.
+    Test.assertEqual(lastHr[59] as Lang.Number, 122);
 
     up.discard();
 

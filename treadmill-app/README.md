@@ -168,7 +168,8 @@ tokens pasted into the app once. Garmin syncs the activity onward to Strava
 and back to the watch's own history.
 
 Wire protocol: "tl_run" parts (part 0 = header + change lists, later parts =
-1500 HR values each), replied to with "tl_result". Runs are keyed by their
+120 HR values each - a 1500-value part never reached the phone on a real
+44-minute run, while the ~300-byte header did), replied to with "tl_result". Runs are keyed by their
 start epoch; the phone dedupes on it, so watch-side retries are always safe.
 An unreachable phone at save time parks the run in watch storage for the
 menu's "Retry upload".
