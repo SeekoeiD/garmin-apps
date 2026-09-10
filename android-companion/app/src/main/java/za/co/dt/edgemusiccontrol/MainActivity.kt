@@ -173,7 +173,7 @@ class MainActivity : Activity(), RemoteState.Listener {
         treadmillStatus.text = if (lastRun == null) {
             getString(R.string.no_runs_yet)
         } else {
-            "Last upload: $lastRun"
+            "Last upload: ${TreadmillReceiver.describeStatus(lastRun)}"
         }
 
         liveStatus.text = buildStatusText()

@@ -37,6 +37,21 @@ class TreadmillReceiver(private val context: Context) {
 
         private const val NOTIFICATION_ID = 0x0965
         private const val TAG = "TreadmillReceiver"
+
+        // Entries written before the date format existed look like "run <epoch>: ...".
+        private val LEGACY_STATUS = Regex("""^run (\d+): (.*)$""")
+
+        fun formatStart(key: Long): String {
+            return SimpleDateFormat("EEE d MMM HH:mm", Locale.getDefault()).format(Date(key * 1000))
+        }
+
+        /** A stored status line, with a legacy epoch-keyed one converted for display. */
+        fun describeStatus(stored: String): String {
+            val match = LEGACY_STATUS.matchEntire(stored) ?: return stored
+            val key = match.groupValues[1].toLongOrNull() ?: return stored
+
+            return "${formatStart(key)}: ${match.groupValues[2]}"
+        }
     }
 
     private val buffer = RunBuffer(File(context.filesDir, "treadmill"))
@@ -206,8 +221,7 @@ class TreadmillReceiver(private val context: Context) {
 
     // The key is the run's start epoch; show it as a local date and time.
     private fun record(key: Long, outcome: String) {
-        val started = SimpleDateFormat("EEE d MMM HH:mm", Locale.getDefault()).format(Date(key * 1000))
-        val status = "$started: $outcome"
+        val status = "${formatStart(key)}: $outcome"
 
         Prefs.setLastRunStatus(context, status)
 
