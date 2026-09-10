@@ -10,6 +10,8 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.round
@@ -202,8 +204,10 @@ class TreadmillReceiver(private val context: Context) {
         return String.format(Locale.US, "%.2f km, +%d m", distance / 1000.0, ascent)
     }
 
+    // The key is the run's start epoch; show it as a local date and time.
     private fun record(key: Long, outcome: String) {
-        val status = "run $key: $outcome"
+        val started = SimpleDateFormat("EEE d MMM HH:mm", Locale.getDefault()).format(Date(key * 1000))
+        val status = "$started: $outcome"
 
         Prefs.setLastRunStatus(context, status)
 
