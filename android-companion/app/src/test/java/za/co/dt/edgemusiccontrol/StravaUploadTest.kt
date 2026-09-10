@@ -33,10 +33,14 @@ class StravaUploadTest {
         assertTrue(text.contains("name=\"external_id\"\r\n\r\ntreadmill_1787200000\r\n"))
     }
 
-    /** Without this the activity is a trainer activity on Strava, and loses its elevation total. */
+    /**
+     * A real run uploaded with trainer=0 came back flagged as a trainer activity anyway: the form
+     * value is read for presence, not truth. Omitting the field is what a web upload does, and a
+     * web upload lands with the flag clear.
+     */
     @Test
-    fun multipartSaysTheRunIsNotOnATrainer() {
-        assertTrue(body().contains("name=\"trainer\"\r\n\r\n0\r\n"))
+    fun multipartSendsNoTrainerField() {
+        assertFalse(body().contains("name=\"trainer\""))
     }
 
     @Test

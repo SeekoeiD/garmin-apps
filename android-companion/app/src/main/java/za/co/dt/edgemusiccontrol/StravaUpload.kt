@@ -10,10 +10,10 @@ import java.net.URL
 /**
  * Uploads a built FIT file straight to Strava, ahead of the Garmin upload.
  *
- * Garmin marks every activity without GPS as a trainer activity, and Strava zeroes the elevation
- * total of anything that arrives that way. A file posted here carries trainer=0 and keeps its
- * ascent, so this upload has to be the one Strava keeps: Garmin's later push then arrives as a
- * duplicate and is dropped.
+ * Strava zeroes the elevation total of any activity flagged as done on a trainer, and both
+ * Garmin's push and Strava itself flag anything that arrives without GPS. So this upload has
+ * to be the one Strava keeps - Garmin's later push then arrives as a duplicate and is dropped
+ * - and the trainer flag is cleared explicitly once the activity exists.
  *
  * Strava does not process an upload inline — the POST returns an upload id and the result has to be
  * polled for. Everything here blocks, including the polling; callers run it off the main thread.
@@ -37,6 +37,7 @@ object StravaUpload {
     }
 
     private const val UPLOADS_URL = "https://www.strava.com/api/v3/uploads"
+    private const val ACTIVITIES_URL = "https://www.strava.com/api/v3/activities"
 
     private const val BOUNDARY = "----EdgeMusicControlStrava3d02b8"
     private const val CONNECT_TIMEOUT_MS = 20_000
@@ -82,7 +83,38 @@ object StravaUpload {
 
         val id = uploadId(response.body) ?: return Result.failure("no upload id")
 
-        return poll(accessToken, id)
+        val result = poll(accessToken, id)
+
+        if (result.ok && result.activityId != 0L) clearTrainerFlag(accessToken, result.activityId)
+
+        return result
+    }
+
+    /**
+     * Force the trainer flag off on the finished activity.
+     *
+     * Strava decides the flag for itself when a file arrives without GPS, and a trainer activity
+     * loses its elevation total - the whole reason the run is uploaded here rather than left to
+     * Garmin's push. Unlike the upload form, this endpoint takes a real JSON boolean, so false
+     * means false. A failure is logged and swallowed: the activity is already on Strava.
+     */
+    private fun clearTrainerFlag(accessToken: String, activityId: Long) {
+        runCatching {
+            val connection = open("$ACTIVITIES_URL/$activityId", accessToken)
+            val body = """{"trainer":false}""".toByteArray(Charsets.UTF_8)
+
+            connection.requestMethod = "PUT"
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.outputStream.use { it.write(body) }
+
+            val response = read(connection)
+
+            if (response.status !in 200..299) {
+                Log.w(TAG, "Could not clear the trainer flag: http ${response.status}")
+            }
+        }.onFailure { Log.w(TAG, "Could not clear the trainer flag", it) }
     }
 
     /** The upload id from a create response, if it named one. */
@@ -129,9 +161,10 @@ object StravaUpload {
         out.write(field("data_type", "fit"))
         out.write(field("sport_type", "Run"))
 
-        // The whole point of uploading here rather than letting Garmin push: trainer=1 costs the
-        // activity its elevation total on Strava.
-        out.write(field("trainer", "0"))
+        // No trainer field at all. Sending trainer=0 produced a trainer activity - the form value
+        // is read for presence, not truth, so "0" marks it just as surely as "1" would. A web
+        // upload omits the field and lands with the flag clear, which is what we want; the flag is
+        // then set explicitly through the activity endpoint, where it is a real boolean.
         out.write(field("external_id", externalId))
 
         val head = "--$BOUNDARY\r\n" +
