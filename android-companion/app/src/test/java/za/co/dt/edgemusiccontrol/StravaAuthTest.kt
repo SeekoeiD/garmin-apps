@@ -80,6 +80,8 @@ class StravaAuthTest {
         assertTrue(url.contains("client_id=54321"))
         assertTrue(url.contains("redirect_uri=http%3A%2F%2Flocalhost%2Fexchange_token"))
         assertTrue(url.contains("response_type=code"))
-        assertTrue(url.contains("scope=activity%3Awrite%2Cread"))
+        // activity:read_all, not the plain read scope: without it the activity endpoint answers
+        // 404 and the trainer flag can never be cleared.
+        assertTrue(url.contains("scope=activity%3Aread_all%2Cactivity%3Awrite"))
     }
 }

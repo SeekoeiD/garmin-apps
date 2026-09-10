@@ -26,7 +26,10 @@ object StravaAuth {
 
     private const val AUTHORIZE_URL = "https://www.strava.com/oauth/mobile/authorize"
     private const val TOKEN_URL = "https://www.strava.com/oauth/token"
-    private const val SCOPE = "activity:write,read"
+    // activity:read_all as well as write. The plain "read" scope covers public segments and
+    // profile data, not activities, so a token without this 404s on the activity endpoint - which
+    // is what stopped the trainer flag from being cleared.
+    private const val SCOPE = "activity:read_all,activity:write"
 
     // Refresh a little early, so an upload never starts on a token that dies mid-request.
     private const val REFRESH_MARGIN_SECONDS = 300L
