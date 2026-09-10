@@ -22,6 +22,7 @@ class MainActivity : Activity(), RemoteState.Listener {
     companion object {
 
         private const val REQUEST_NOTIFICATIONS = 1
+        private const val REQUEST_STRAVA = 2
     }
 
     private lateinit var notificationStatus: TextView
@@ -33,6 +34,12 @@ class MainActivity : Activity(), RemoteState.Listener {
     private lateinit var tokenField: EditText
     private lateinit var tokenButton: Button
     private lateinit var tokenStatus: TextView
+    private lateinit var stravaIdField: EditText
+    private lateinit var stravaSecretField: EditText
+    private lateinit var stravaSaveButton: Button
+    private lateinit var stravaStatus: TextView
+    private lateinit var stravaConnectButton: Button
+    private lateinit var stravaDisconnectButton: Button
     private lateinit var treadmillStatus: TextView
     private lateinit var liveStatus: TextView
 
@@ -50,6 +57,12 @@ class MainActivity : Activity(), RemoteState.Listener {
         tokenField = findViewById(R.id.tokenField)
         tokenButton = findViewById(R.id.tokenButton)
         tokenStatus = findViewById(R.id.tokenStatus)
+        stravaIdField = findViewById(R.id.stravaIdField)
+        stravaSecretField = findViewById(R.id.stravaSecretField)
+        stravaSaveButton = findViewById(R.id.stravaSaveButton)
+        stravaStatus = findViewById(R.id.stravaStatus)
+        stravaConnectButton = findViewById(R.id.stravaConnectButton)
+        stravaDisconnectButton = findViewById(R.id.stravaDisconnectButton)
         treadmillStatus = findViewById(R.id.treadmillStatus)
         liveStatus = findViewById(R.id.liveStatus)
 
@@ -63,7 +76,22 @@ class MainActivity : Activity(), RemoteState.Listener {
 
         tokenButton.setOnClickListener { saveTokens() }
 
+        stravaSaveButton.setOnClickListener { saveStravaApp() }
+
+        stravaConnectButton.setOnClickListener { connectStrava() }
+
+        stravaDisconnectButton.setOnClickListener { disconnectStrava() }
+
+        // The client id is not a secret and is a nuisance to retype; the secret is never shown back.
+        stravaIdField.setText(Prefs.stravaClientId(this).orEmpty())
+
         requestNotificationPermission()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == REQUEST_STRAVA) render()
     }
 
     override fun onResume() {
@@ -119,6 +147,43 @@ class MainActivity : Activity(), RemoteState.Listener {
         render()
     }
 
+    /**
+     * The client id and secret of the user's own Strava API application. Like the Garmin tokens,
+     * they go straight to Prefs; the secret field is cleared rather than left on screen.
+     */
+    private fun saveStravaApp() {
+        val clientId = stravaIdField.text.toString().trim()
+        val clientSecret = stravaSecretField.text.toString().trim()
+
+        if (clientId.isEmpty() || clientSecret.isEmpty()) {
+            Toast.makeText(this, R.string.strava_app_missing, Toast.LENGTH_LONG).show()
+
+            return
+        }
+
+        Prefs.setStravaApp(this, Prefs.StravaApp(clientId, clientSecret))
+
+        stravaSecretField.setText("")
+
+        render()
+    }
+
+    private fun connectStrava() {
+        if (Prefs.stravaApp(this) == null) {
+            Toast.makeText(this, R.string.strava_app_missing, Toast.LENGTH_LONG).show()
+
+            return
+        }
+
+        startActivityForResult(Intent(this, StravaAuthActivity::class.java), REQUEST_STRAVA)
+    }
+
+    private fun disconnectStrava() {
+        Prefs.clearStravaTokens(this)
+
+        render()
+    }
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
 
@@ -167,6 +232,21 @@ class MainActivity : Activity(), RemoteState.Listener {
         tokenStatus.setText(
             if (Prefs.hasGarminTokens(this)) R.string.tokens_saved else R.string.tokens_missing
         )
+
+        val connected = Prefs.hasStravaTokens(this)
+        val athlete = Prefs.stravaAthlete(this)
+
+        stravaStatus.text = when {
+            !connected -> getString(R.string.strava_not_connected)
+            athlete.isNullOrEmpty() -> getString(R.string.strava_connected)
+            else -> getString(R.string.strava_connected_as, athlete)
+        }
+
+        stravaConnectButton.setText(
+            if (connected) R.string.strava_reconnect else R.string.strava_connect
+        )
+
+        stravaDisconnectButton.isEnabled = connected
 
         val lastRun = RemoteState.lastRunStatus ?: Prefs.lastRunStatus(this)
 

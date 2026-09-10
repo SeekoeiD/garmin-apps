@@ -37,4 +37,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
 
     testImplementation("junit:junit:4.13.2")
+
+    // The unit tests parse real Strava responses. Every org.json method in the mockable android.jar
+    // throws, so the tests need the reference implementation of the same API on the classpath.
+    testImplementation("org.json:json:20231013")
 }

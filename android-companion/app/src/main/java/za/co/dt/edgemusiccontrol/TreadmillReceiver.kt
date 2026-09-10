@@ -18,7 +18,7 @@ import kotlin.math.round
 
 /**
  * Receives a recorded treadmill run from the Forerunner app, rebuilds it as a FIT file and uploads
- * it to Garmin Connect.
+ * it — to Strava directly if that is connected, and then to Garmin Connect.
  *
  * The watch sends the run in parts at save time and retries anything it is unsure of, so every entry
  * point here has to tolerate repeats: a part that arrives twice overwrites itself harmlessly, and a
@@ -176,13 +176,20 @@ class TreadmillReceiver(private val context: Context) {
         val distance = round(totals.distance).toInt()
         val ascent = round(totals.ascent).toInt()
 
+        // Strava first, on purpose. Garmin marks every GPS-less activity as a trainer activity and
+        // Strava zeroes the elevation of anything that arrives that way, so the phone's own upload
+        // has to be the one Strava keeps; Garmin's later push then lands as a duplicate and is
+        // dropped. A failure here is reported and otherwise ignored — the watch is waiting on
+        // Garmin, not on Strava.
+        val strava = uploadToStrava(key, fit)
+
         val error = GarminUpload.upload(context, "treadmill_$key.fit", fit)
 
         if (error != null) {
             Log.w(TAG, "Run $key upload rejected: $error")
 
-            record(key, "failed — $error")
-            notify("Treadmill upload failed", error)
+            record(key, "failed — $error" + suffix(strava))
+            notify("Treadmill upload failed", error + suffix(strava))
 
             respond(reply, failure(key, error))
 
@@ -193,7 +200,7 @@ class TreadmillReceiver(private val context: Context) {
 
         buffer.discard(key)
 
-        val summary = describe(distance, ascent)
+        val summary = describe(distance, ascent) + " · Garmin ok" + suffix(strava)
 
         Log.i(TAG, "Run $key uploaded: $summary")
 
@@ -201,6 +208,46 @@ class TreadmillReceiver(private val context: Context) {
         notify("Treadmill run uploaded", summary)
 
         respond(reply, success(key, distance, ascent))
+    }
+
+    /**
+     * Uploads the same FIT to Strava directly. Returns null when Strava is not connected, otherwise
+     * a short phrase for the status line. Never throws: this must not be able to cost the run its
+     * Garmin upload.
+     */
+    private fun uploadToStrava(key: Long, fit: ByteArray): String? {
+        if (!Prefs.hasStravaTokens(context)) return null
+
+        // A run Strava already has; re-uploading would only earn a duplicate rejection.
+        if (Prefs.stravaUploadedRun(context, key) != null) {
+            Log.i(TAG, "Run $key is already on Strava")
+
+            return "ok"
+        }
+
+        val result = runCatching { StravaUpload.upload(context, key, fit) }.getOrElse { error ->
+            Log.w(TAG, "Run $key Strava upload failed", error)
+
+            return "failed: ${error.javaClass.simpleName}"
+        }
+
+        if (!result.ok) {
+            Log.w(TAG, "Run $key Strava upload rejected: ${result.error}")
+
+            return "failed: " + (result.error ?: "rejected").take(60)
+        }
+
+        Prefs.setStravaUploadedRun(context, key, result.activityId)
+
+        Log.i(TAG, "Run $key is on Strava as activity ${result.activityId}")
+
+        return "ok"
+    }
+
+    private fun suffix(strava: String?): String {
+        if (strava == null) return ""
+
+        return " · Strava $strava"
     }
 
     private fun success(key: Long, distance: Int, ascent: Int): Map<String, Any> {

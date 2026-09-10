@@ -35,6 +35,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Only ever started from MainActivity, for one authorisation code. -->
+        <activity
+            android:name=".StravaAuthActivity"
+            android:exported="false"
+            android:label="@string/strava_connect" />
+
         <service
             android:name=".EdgeRemoteService"
             android:exported="false"

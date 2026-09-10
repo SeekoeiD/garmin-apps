@@ -9,6 +9,7 @@
     <string name="step_battery">2. Battery optimisation</string>
     <string name="step_service">3. Garmin link service (Edge + watch)</string>
     <string name="step_treadmill">4. Treadmill run uploads</string>
+    <string name="step_strava">5. Strava direct upload</string>
 
     <string name="grant">Grant</string>
     <string name="exempt">Exempt</string>
@@ -29,6 +30,18 @@
     <string name="tokens_missing">Garmin tokens: missing</string>
     <string name="tokens_rejected">That is not valid token JSON</string>
     <string name="no_runs_yet">Last upload: none yet</string>
+
+    <string name="strava_id_hint">Strava client ID</string>
+    <string name="strava_secret_hint">Strava client secret</string>
+    <string name="strava_connect">Connect Strava</string>
+    <string name="strava_reconnect">Reconnect Strava</string>
+    <string name="strava_disconnect">Disconnect</string>
+    <string name="strava_connected">Strava: connected</string>
+    <string name="strava_connected_as">Strava: connected as %1$s</string>
+    <string name="strava_not_connected">Strava: not connected</string>
+    <string name="strava_app_missing">Enter the Strava client ID and secret first</string>
+    <string name="strava_no_code">Strava returned no code</string>
+    <string name="strava_connect_failed">Strava connection failed: %1$s</string>
 
     <string name="notification_channel_name">Edge remote</string>
     <string name="notification_title">Edge music remote active</string>
