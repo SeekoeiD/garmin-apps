@@ -101,7 +101,7 @@ class FitBuild(unittest.TestCase):
         session = messages_of(self.blob, 18)[0]
 
         self.assertEqual(session.get(5), 1)
-        self.assertEqual(session.get(6), 58)   # virtual_activity
+        self.assertEqual(session.get(6), 0)   # virtual_activity
         self.assertEqual(session.get(2), START - GARMIN_EPOCH)
         self.assertEqual(session.get(253), START - GARMIN_EPOCH + 300)
         self.assertEqual(session.get(7), 300000)

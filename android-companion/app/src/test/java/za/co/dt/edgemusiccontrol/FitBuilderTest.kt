@@ -181,7 +181,7 @@ class FitBuilderTest {
         assertEquals(round(totals.maxSpeed * 1000.0), session.get(15))
         assertEquals(round(totals.ascent), session.get(22))
         assertEquals(1.0, session.get(5))                          // sport: running
-        assertEquals(58.0, session.get(6))                         // sub_sport: virtual_activity
+        assertEquals(0.0, session.get(6))                          // sub_sport: generic
 
         // 60 s at 2 m/s flat, then 60 s at 2.8 m/s on 5 %, whose belt speed is the hypotenuse.
         assertTrue(abs(totals.distance - (60 * 2.0 + 60 * 2.8)) < 1e-9)

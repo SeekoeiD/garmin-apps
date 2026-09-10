@@ -277,9 +277,10 @@ object RunBuilder {
         m.set(0, FitEncoder.ENUM, 8)                              // event: session
         m.set(1, FitEncoder.ENUM, 1)                              // event_type: stop
         m.set(5, FitEncoder.ENUM, 1)                              // sport: running
-        // virtual_activity, not treadmill: Strava zeroes the elevation total of
-        // treadmill-tagged runs but keeps it for a Virtual Run.
-        m.set(6, FitEncoder.ENUM, 58)                             // sub_sport: virtual_activity
+        // generic, not treadmill or virtual_activity: Garmin pushes every indoor
+        // sub-sport to Strava as trainer=true, and Strava zeroes the elevation
+        // total of trainer activities. A plain run keeps the climb.
+        m.set(6, FitEncoder.ENUM, 0)                              // sub_sport: generic
         m.set(7, FitEncoder.UINT32, totals.seconds * 1000.0)
         m.set(8, FitEncoder.UINT32, totals.seconds * 1000.0)
         m.set(9, FitEncoder.UINT32, totals.distance * 100.0)

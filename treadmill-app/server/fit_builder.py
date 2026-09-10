@@ -189,10 +189,11 @@ def session_message(start_ts, end_ts, totals):
     m.set(0, ENUM, 8)
     m.set(1, ENUM, 1)
     m.set(5, ENUM, 1)
-    # sub_sport virtual_activity (58), not treadmill (1): Strava strips the
-    # elevation total from anything tagged treadmill, but counts it for a
-    # Virtual Run - the type Garmin itself uses for treadmill + app runs.
-    m.set(6, ENUM, 58)
+    # sub_sport generic (0), not treadmill (1) or virtual_activity (58):
+    # Garmin pushes every indoor sub-sport to Strava with trainer=true, and
+    # Strava zeroes the elevation total of trainer activities. A plain run
+    # is the only type that keeps the climb.
+    m.set(6, ENUM, 0)
     m.set(7, UINT32, totals['seconds'] * 1000.0)
     m.set(8, UINT32, totals['seconds'] * 1000.0)
     m.set(9, UINT32, totals['distance'] * 100.0)
