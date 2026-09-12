@@ -48,6 +48,10 @@ object StravaUpload {
     // the poll gives up well short of that. Strava normally settles in a few seconds.
     private const val POLL_TIMEOUT_MS = 30_000L
 
+    // Shown on the activity. Nothing else on Strava marks the run as indoor once the trainer
+    // flag is cleared, and the flag has to go or the elevation total does.
+    private const val DESCRIPTION = "Treadmill"
+
     private const val TAG = "StravaUpload"
 
     // "treadmill_1787200000.fit duplicate of activity 12345678901"
@@ -85,23 +89,26 @@ object StravaUpload {
 
         val result = poll(accessToken, id)
 
-        if (result.ok && result.activityId != 0L) clearTrainerFlag(accessToken, result.activityId)
+        if (result.ok && result.activityId != 0L) describe(accessToken, result.activityId)
 
         return result
     }
 
     /**
-     * Force the trainer flag off on the finished activity.
+     * Clear the trainer flag on the finished activity and say what it was.
      *
-     * Strava decides the flag for itself when a file arrives without GPS, and a trainer activity
-     * loses its elevation total - the whole reason the run is uploaded here rather than left to
-     * Garmin's push. Unlike the upload form, this endpoint takes a real JSON boolean, so false
-     * means false. A failure is logged and swallowed: the activity is already on Strava.
+     * Strava sets the flag itself when a file arrives without GPS, and a trainer activity loses its
+     * elevation total - the whole reason the run is uploaded here rather than left to Garmin's
+     * push. Unlike the upload form, this endpoint takes a real JSON boolean, so false means false.
+     * Clearing it leaves the run looking like any outdoor one, hence the description: it is the
+     * only place Strava offers to say where the climb actually came from.
+     *
+     * A failure is logged and swallowed: the activity is already on Strava either way.
      */
-    private fun clearTrainerFlag(accessToken: String, activityId: Long) {
+    private fun describe(accessToken: String, activityId: Long) {
         runCatching {
             val connection = open("$ACTIVITIES_URL/$activityId", accessToken)
-            val body = """{"trainer":false}""".toByteArray(Charsets.UTF_8)
+            val body = """{"trainer":false,"description":"$DESCRIPTION"}""".toByteArray(Charsets.UTF_8)
 
             connection.requestMethod = "PUT"
             connection.doOutput = true
@@ -112,9 +119,9 @@ object StravaUpload {
             val response = read(connection)
 
             if (response.status !in 200..299) {
-                Log.w(TAG, "Could not clear the trainer flag: http ${response.status}")
+                Log.w(TAG, "Could not describe the activity: http ${response.status}")
             }
-        }.onFailure { Log.w(TAG, "Could not clear the trainer flag", it) }
+        }.onFailure { Log.w(TAG, "Could not describe the activity", it) }
     }
 
     /** The upload id from a create response, if it named one. */
